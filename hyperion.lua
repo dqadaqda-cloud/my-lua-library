@@ -1,7 +1,7 @@
 --[[
-    Hyperion UI Library
-    Version: 1.0.0
-    Inspired by Material You & FluentPlus
+    Hyperion V2 — Material You UI Library for Roblox
+    Версия: 2.0.0
+    Лицензия: MIT
 ]]
 
 local Hyperion = {}
@@ -12,11 +12,15 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local TextService = game:GetService("TextService")
+local HttpService = game:GetService("HttpService")
+
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 local Camera = workspace.CurrentCamera
 
 local isMobile = table.find({Enum.Platform.IOS, Enum.Platform.Android}, UserInputService:GetPlatform()) ~= nil
+
+-- // ====== UTILITY ====== //
 
 local function hexToRgb(hex)
     local r = tonumber(hex:sub(2,3), 16) or 255
@@ -43,55 +47,45 @@ local function adjustBrightness(c, percent)
     )
 end
 
-local function createMotor(initial)
-    local state = { value = initial, velocity = 0 }
-    local goal = initial
-    local frequency = 6
-    local damping = 1
-    
-    local function step(dt)
-        if math.abs(state.value - goal) < 0.001 and math.abs(state.velocity) < 0.001 then
-            state.value = goal
-            state.velocity = 0
-            return true
-        end
-        
-        local d = damping
-        local f = frequency * 2 * math.pi
-        local g = goal
-        local p0 = state.value
-        local v0 = state.velocity
-        
-        local offset = p0 - g
-        local decay = math.exp(-d * f * dt)
-        
-        if d == 1 then
-            state.value = (offset * (1 + f * dt) + v0 * dt) * decay + g
-            state.velocity = (v0 * (1 - f * dt) - offset * (f * f * dt)) * decay
-        else
-            local c = math.sqrt(1 - d * d)
-            local i = math.cos(f * c * dt)
-            local j = math.sin(f * c * dt)
-            local z = j / c
-            local y = j / (f * c)
-            state.value = (offset * (i + d * z) + v0 * y) * decay + g
-            state.velocity = (v0 * (i - z * d) - offset * (z * f)) * decay
-        end
-        
-        return math.abs(state.value - goal) < 0.001 and math.abs(state.velocity) < 0.001
+local function createUIElement(className, properties, children)
+    local obj = Instance.new(className)
+    for k, v in pairs(properties or {}) do
+        obj[k] = v
     end
-    
-    local function setGoal(newGoal)
-        goal = newGoal
+    for _, child in pairs(children or {}) do
+        child.Parent = obj
     end
-    
-    return {
-        step = step,
-        getValue = function() return state.value end,
-        setGoal = setGoal,
-        getState = function() return state end,
-    }
+    return obj
 end
+
+local function createRipple(parent, color)
+    local ripple = createUIElement("Frame", {
+        Size = UDim2.new(0, 0, 0, 0),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = color or Color3.fromRGB(255,255,255),
+        BackgroundTransparency = 0.8,
+        BorderSizePixel = 0,
+        ZIndex = 999,
+    }, {
+        createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
+    })
+    ripple.Parent = parent
+    return ripple
+end
+
+local function animateRipple(ripple, size)
+    local tween = TweenService:Create(ripple, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Size = UDim2.new(0, size, 0, size),
+        BackgroundTransparency = 1,
+    })
+    tween:Play()
+    tween.Completed:Connect(function()
+        ripple:Destroy()
+    end)
+end
+
+-- // ====== THEMES ====== //
 
 local Themes = {
     Default = {
@@ -184,43 +178,7 @@ local Themes = {
     },
 }
 
-local function createUIElement(className, properties, children)
-    local obj = Instance.new(className)
-    for k, v in pairs(properties or {}) do
-        obj[k] = v
-    end
-    for _, child in pairs(children or {}) do
-        child.Parent = obj
-    end
-    return obj
-end
-
-local function createRipple(parent, color)
-    local ripple = createUIElement("Frame", {
-        Size = UDim2.new(0, 0, 0, 0),
-        Position = UDim2.new(0.5, 0, 0.5, 0),
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundColor3 = color or Color3.fromRGB(255,255,255),
-        BackgroundTransparency = 0.8,
-        BorderSizePixel = 0,
-        ZIndex = 999,
-    }, {
-        createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-    })
-    ripple.Parent = parent
-    return ripple
-end
-
-local function animateRipple(ripple, size)
-    local tween = TweenService:Create(ripple, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, size, 0, size),
-        BackgroundTransparency = 1,
-    })
-    tween:Play()
-    tween.Completed:Connect(function()
-        ripple:Destroy()
-    end)
-end
+-- // ====== HYPERION WINDOW ====== //
 
 local HyperionWindow = {}
 HyperionWindow.__index = HyperionWindow
@@ -230,13 +188,15 @@ function HyperionWindow.new(config)
     
     self.title = config.Title or "Hyperion"
     self.size = config.Size or UDim2.new(0, 600, 0, 450)
-    self.theme = Themes[config.Theme] or Themes.Default
+    self.themeName = config.Theme or "Default"
+    self.theme = Themes[self.themeName] or Themes.Default
     self.acrylic = config.Acrylic or false
     self.minimized = false
     self.tabs = {}
     self.activeTab = nil
     self.elements = {}
     self.log = {}
+    self.config = config
     
     self.gui = createUIElement("ScreenGui", {
         Parent = LocalPlayer:WaitForChild("PlayerGui"),
@@ -407,7 +367,7 @@ function HyperionWindow.new(config)
             ZIndex = 2,
         }),
         createUIElement("ScrollingFrame", {
-            Parent = self.root,
+            Parent = self.logger,
             Size = UDim2.new(1, -24, 1, -60),
             Position = UDim2.new(0, 12, 0, 40),
             BackgroundTransparency = 1,
@@ -494,6 +454,8 @@ function HyperionWindow:setTheme(themeName)
     local theme = Themes[themeName]
     if not theme then return end
     self.theme = theme
+    self.themeName = themeName
+    
     self.root.BackgroundColor3 = theme.surface
     for _, child in pairs(self.root:GetDescendants()) do
         if child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox") then
@@ -794,6 +756,7 @@ function HyperionWindow:addTab(name, icon)
         function section:addToggle(config)
             local toggle = addElement("Toggle", config)
             toggle.value = config.Default or false
+            toggle.callbacks = {}
             
             local frame = createUIElement("Frame", {
                 Parent = toggle.control,
@@ -830,10 +793,18 @@ function HyperionWindow:addTab(name, icon)
                 TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
                     BackgroundColor3 = targetColor,
                 }):Play()
+                for _, callback in pairs(self.callbacks) do
+                    callback(value)
+                end
                 if config.Callback then
                     config.Callback(value)
                 end
                 self:addLog("Toggle changed: " .. config.Title .. " = " .. tostring(value))
+            end
+            
+            function toggle:OnChanged(callback)
+                table.insert(self.callbacks, callback)
+                callback(self.value)
             end
             
             frame.MouseButton1Click:Connect(function()
@@ -851,6 +822,7 @@ function HyperionWindow:addTab(name, icon)
             slider.min = config.Min or 0
             slider.max = config.Max or 100
             slider.rounding = config.Rounding or 0
+            slider.callbacks = {}
             
             local frame = createUIElement("Frame", {
                 Parent = slider.control,
@@ -929,10 +901,18 @@ function HyperionWindow:addTab(name, icon)
                 if valueLabel then
                     valueLabel.Text = tostring(rounded)
                 end
+                for _, callback in pairs(slider.callbacks) do
+                    callback(rounded)
+                end
                 if config.Callback then
                     config.Callback(rounded)
                 end
                 self:addLog("Slider changed: " .. config.Title .. " = " .. tostring(rounded))
+            end
+            
+            function slider:OnChanged(callback)
+                table.insert(self.callbacks, callback)
+                callback(self.value)
             end
             
             local dragging = false
@@ -980,6 +960,7 @@ function HyperionWindow:addTab(name, icon)
             local dropdown = addElement("Dropdown", config)
             dropdown.values = config.Values or {}
             dropdown.value = config.Default or nil
+            dropdown.callbacks = {}
             
             local frame = createUIElement("Frame", {
                 Parent = dropdown.control,
@@ -1071,10 +1052,18 @@ function HyperionWindow:addTab(name, icon)
                 if display then
                     display.Text = value or "Select..."
                 end
+                for _, callback in pairs(dropdown.callbacks) do
+                    callback(value)
+                end
                 if config.Callback then
                     config.Callback(value)
                 end
                 self:addLog("Dropdown changed: " .. config.Title .. " = " .. tostring(value))
+            end
+            
+            function dropdown:OnChanged(callback)
+                table.insert(self.callbacks, callback)
+                callback(self.value)
             end
             
             local function buildOptions()
@@ -1139,6 +1128,7 @@ function HyperionWindow:addTab(name, icon)
         function section:addKeybind(config)
             local keybind = addElement("Keybind", config)
             keybind.value = config.Default or "None"
+            keybind.callbacks = {}
             
             local btn = createUIElement("TextButton", {
                 Parent = keybind.control,
@@ -1167,6 +1157,11 @@ function HyperionWindow:addTab(name, icon)
             
             keybind.control.Size = UDim2.new(0, 0, 0, 28)
             
+            function keybind:OnChanged(callback)
+                table.insert(self.callbacks, callback)
+                callback(self.value)
+            end
+            
             local picking = false
             
             btn.MouseButton1Click:Connect(function()
@@ -1182,6 +1177,9 @@ function HyperionWindow:addTab(name, icon)
                         keybind.value = key
                         btn.Text = key
                         picking = false
+                        for _, callback in pairs(keybind.callbacks) do
+                            callback(key)
+                        end
                         if config.Callback then
                             config.Callback(key)
                         end
@@ -1190,6 +1188,9 @@ function HyperionWindow:addTab(name, icon)
                         keybind.value = "MouseLeft"
                         btn.Text = "MouseLeft"
                         picking = false
+                        for _, callback in pairs(keybind.callbacks) do
+                            callback("MouseLeft")
+                        end
                         if config.Callback then
                             config.Callback("MouseLeft")
                         end
@@ -1198,6 +1199,9 @@ function HyperionWindow:addTab(name, icon)
                         keybind.value = "MouseRight"
                         btn.Text = "MouseRight"
                         picking = false
+                        for _, callback in pairs(keybind.callbacks) do
+                            callback("MouseRight")
+                        end
                         if config.Callback then
                             config.Callback("MouseRight")
                         end
@@ -1218,6 +1222,7 @@ function HyperionWindow:addTab(name, icon)
             local colorpicker = addElement("Colorpicker", config)
             colorpicker.value = config.Default or Color3.fromRGB(255,255,255)
             colorpicker.transparency = config.Transparency or 0
+            colorpicker.callbacks = {}
             
             local frame = createUIElement("Frame", {
                 Parent = colorpicker.control,
@@ -1244,6 +1249,11 @@ function HyperionWindow:addTab(name, icon)
                     Thickness = 1,
                 }),
             })
+            
+            function colorpicker:OnChanged(callback)
+                table.insert(self.callbacks, callback)
+                callback(self.value)
+            end
             
             local function openPicker()
                 local dialog = self:createDialog("Color Picker")
@@ -1411,6 +1421,9 @@ function HyperionWindow:addTab(name, icon)
                     colorpicker.transparency = trans
                     preview.BackgroundColor3 = colorpicker.value
                     preview.BackgroundTransparency = trans
+                    for _, callback in pairs(colorpicker.callbacks) do
+                        callback(colorpicker.value)
+                    end
                     if config.Callback then
                         config.Callback(colorpicker.value)
                     end
@@ -1663,6 +1676,83 @@ function HyperionWindow:minimize()
     self.root.Visible = not self.minimized
     self:addLog("Minimized: " .. tostring(self.minimized))
 end
+
+-- // ====== SAVE MANAGER ====== //
+
+Hyperion.SaveManager = {}
+Hyperion.SaveManager.__index = Hyperion.SaveManager
+
+function Hyperion.SaveManager.new(window)
+    local self = setmetatable({}, Hyperion.SaveManager)
+    self.window = window
+    self.folder = "HyperionSettings"
+    self.options = {}
+    self.ignored = {}
+    
+    if not isfolder(self.folder) then
+        makefolder(self.folder)
+    end
+    
+    return self
+end
+
+function Hyperion.SaveManager:setFolder(folder)
+    self.folder = folder
+    if not isfolder(self.folder) then
+        makefolder(self.folder)
+    end
+end
+
+function Hyperion.SaveManager:ignoreIndex(index)
+    self.ignored[index] = true
+end
+
+function Hyperion.SaveManager:registerOption(index, option)
+    self.options[index] = option
+end
+
+function Hyperion.SaveManager:save(name)
+    local data = {}
+    for idx, option in pairs(self.options) do
+        if not self.ignored[idx] then
+            local value = option.value
+            data[idx] = value
+        end
+    end
+    local json = HttpService:JSONEncode(data)
+    writefile(self.folder .. "/" .. name .. ".json", json)
+    self.window:addLog("Config saved: " .. name)
+end
+
+function Hyperion.SaveManager:load(name)
+    local path = self.folder .. "/" .. name .. ".json"
+    if not isfile(path) then return false end
+    local json = readfile(path)
+    local data = HttpService:JSONDecode(json)
+    for idx, value in pairs(data) do
+        if self.options[idx] and not self.ignored[idx] then
+            self.options[idx]:setValue(value)
+        end
+    end
+    self.window:addLog("Config loaded: " .. name)
+    return true
+end
+
+function Hyperion.SaveManager:list()
+    local files = listfiles(self.folder)
+    local names = {}
+    for _, file in pairs(files) do
+        if file:match("%.json$") then
+            local name = file:match("([^/]+)%.json$")
+            if name then
+                table.insert(names, name)
+            end
+        end
+    end
+    return names
+end
+
+-- // ====== EXPORT ====== //
 
 Hyperion.Window = HyperionWindow
 Hyperion.Themes = Themes
