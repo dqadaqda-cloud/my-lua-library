@@ -1,1760 +1,1277 @@
 --[[
-    Hyperion V2 — Material You UI Library for Roblox
-    Версия: 2.0.0
-    Лицензия: MIT
+  ═══════════════════════════════════════════════════════════════
+  FLUENT MATERIAL — Material You Edition (Android 16 Style)
+  Версия: 3.0.0
+  Основано на Fluent, переработано под Material Design 3
+  ═══════════════════════════════════════════════════════════════
 ]]
 
-local Hyperion = {}
-Hyperion.__index = Hyperion
+-- ============================================================
+-- 1. МОДУЛЬ ЦВЕТОВ (MATERIAL YOU PALETTE)
+-- ============================================================
 
-local Players = game:GetService("Players")
+local MaterialYou = {}
+
+-- Алгоритм генерации палитры из seed-цвета (упрощённый вариант)
+function MaterialYou.GeneratePalette(seedColor)
+    local function hsl(r, g, b)
+        local min = math.min(r, g, b)
+        local max = math.max(r, g, b)
+        local delta = max - min
+        local h, s, l
+        
+        if delta == 0 then
+            h = 0
+        elseif max == r then
+            h = ((g - b) / delta) % 6
+        elseif max == g then
+            h = ((b - r) / delta) + 2
+        else
+            h = ((r - g) / delta) + 4
+        end
+        h = h / 6
+        s = max == 0 and 0 or delta / max
+        l = max
+        return h, s, l
+    end
+    
+    local function hslToRgb(h, s, l)
+        if s == 0 then return l, l, l end
+        local function hueToRgb(p, q, t)
+            if t < 0 then t = t + 1 end
+            if t > 1 then t = t - 1 end
+            if t < 1/6 then return p + (q - p) * 6 * t end
+            if t < 1/2 then return q end
+            if t < 2/3 then return p + (q - p) * (2/3 - t) * 6 end
+            return p
+        end
+        local q = l < 0.5 and l * (1 + s) or l + s - l * s
+        local p = 2 * l - q
+        return hueToRgb(p, q, h + 1/3),
+               hueToRgb(p, q, h),
+               hueToRgb(p, q, h - 1/3)
+    end
+    
+    local h, s, l = hsl(seedColor.r, seedColor.g, seedColor.b)
+    
+    -- Генерируем тона
+    local function getTone(tone)
+        local lightness = tone / 100
+        local r, g, b = hslToRgb(h, s * 0.8, lightness)
+        return Color3.new(r, g, b)
+    end
+    
+    return {
+        primary = getTone(40),
+        onPrimary = getTone(100),
+        primaryContainer = getTone(90),
+        onPrimaryContainer = getTone(10),
+        secondary = getTone(60),
+        onSecondary = getTone(100),
+        secondaryContainer = getTone(85),
+        onSecondaryContainer = getTone(10),
+        surface = getTone(98),
+        onSurface = getTone(10),
+        surfaceVariant = getTone(95),
+        onSurfaceVariant = getTone(30),
+        background = getTone(99),
+        onBackground = getTone(10),
+        outline = getTone(50),
+        outlineVariant = getTone(80),
+        shadow = Color3.new(0, 0, 0),
+        scrim = Color3.new(0, 0, 0),
+        surfaceTint = getTone(40),
+        error = Color3.fromRGB(186, 26, 26),
+        onError = Color3.fromRGB(255, 255, 255),
+        errorContainer = Color3.fromRGB(255, 218, 214),
+        onErrorContainer = Color3.fromRGB(65, 0, 2),
+    }
+end
+
+-- Текущая палитра (по умолчанию — синий, как Android)
+local currentPalette = MaterialYou.GeneratePalette(Color3.fromRGB(66, 133, 244))
+local seedColor = Color3.fromRGB(66, 133, 244)
+
+function MaterialYou.SetSeedColor(color)
+    seedColor = color
+    currentPalette = MaterialYou.GeneratePalette(color)
+    if MaterialYou.OnThemeChanged then
+        MaterialYou.OnThemeChanged(currentPalette)
+    end
+end
+
+function MaterialYou.GetColor(name)
+    return currentPalette[name] or Color3.new(1, 1, 1)
+end
+
+-- ============================================================
+-- 2. ЯДРО БИБЛИОТЕКИ (ПЕРЕПИСАНО ПОД M3)
+-- ============================================================
+
+local Library = {
+    Version = "3.0.0",
+    Theme = "MaterialYou",
+    OpenFrames = {},
+    Options = {},
+    Windows = {},
+    Window = nil,
+    Unloaded = false,
+    DialogOpen = false,
+    UseAcrylic = false,
+    MinimizeKey = Enum.KeyCode.LeftControl,
+    MinimizeKeybind = nil,
+    Creator = {},
+    Elements = {},
+    ActiveNotifications = {},
+    GUI = nil,
+}
+
+-- Определяем мобилку
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local TextService = game:GetService("TextService")
-local HttpService = game:GetService("HttpService")
+local Mobile = not RunService:IsStudio() and table.find({Enum.Platform.IOS, Enum.Platform.Android}, UserInputService:GetPlatform()) ~= nil
 
-local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
-local Camera = workspace.CurrentCamera
+-- ============================================================
+-- 3. Flipper (анимации) — оставляем как есть, он идеален
+-- ============================================================
 
-local isMobile = table.find({Enum.Platform.IOS, Enum.Platform.Android}, UserInputService:GetPlatform()) ~= nil
-
--- // ====== UTILITY ====== //
-
-local function hexToRgb(hex)
-    local r = tonumber(hex:sub(2,3), 16) or 255
-    local g = tonumber(hex:sub(4,5), 16) or 255
-    local b = tonumber(hex:sub(6,7), 16) or 255
-    return Color3.fromRGB(r, g, b)
-end
-
-local function rgbToHex(c)
-    return string.format("#%02X%02X%02X", c.R*255, c.G*255, c.B*255)
-end
-
-local function getContrastColor(c)
-    local lum = (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255
-    return lum > 0.5 and Color3.fromRGB(0,0,0) or Color3.fromRGB(255,255,255)
-end
-
-local function adjustBrightness(c, percent)
-    local factor = 1 + percent / 100
-    return Color3.new(
-        math.clamp(c.R * factor, 0, 1),
-        math.clamp(c.G * factor, 0, 1),
-        math.clamp(c.B * factor, 0, 1)
-    )
-end
-
-local function createUIElement(className, properties, children)
-    local obj = Instance.new(className)
-    for k, v in pairs(properties or {}) do
-        obj[k] = v
+local Flipper = {}
+do
+    local function isMotor(value)
+        return tostring(value):match("^Motor%(") and true or false
     end
-    for _, child in pairs(children or {}) do
-        child.Parent = obj
+    
+    local Connection = { __index = {} }
+    function Connection.new(signal, handler)
+        return setmetatable({ signal = signal, connected = true, _handler = handler }, Connection)
     end
+    function Connection:disconnect()
+        if self.connected then
+            self.connected = false
+            for i, c in pairs(self.signal._connections) do
+                if c == self then table.remove(self.signal._connections, i) return end
+            end
+        end
+    end
+    
+    local Signal = { __index = {} }
+    function Signal.new()
+        return setmetatable({ _connections = {}, _threads = {} }, Signal)
+    end
+    function Signal:fire(...)
+        for _, c in pairs(self._connections) do c._handler(...) end
+        for _, t in pairs(self._threads) do coroutine.resume(t, ...) end
+        self._threads = {}
+    end
+    function Signal:connect(handler)
+        local c = Connection.new(self, handler)
+        table.insert(self._connections, c)
+        return c
+    end
+    function Signal:wait()
+        table.insert(self._threads, coroutine.running())
+        return coroutine.yield()
+    end
+    
+    local function noop() end
+    
+    local BaseMotor = { __index = {} }
+    function BaseMotor.new()
+        return setmetatable({ _onStep = Signal.new(), _onStart = Signal.new(), _onComplete = Signal.new() }, BaseMotor)
+    end
+    BaseMotor.onStep = function(self, h) return self._onStep:connect(h) end
+    BaseMotor.onStart = function(self, h) return self._onStart:connect(h) end
+    BaseMotor.onComplete = function(self, h) return self._onComplete:connect(h) end
+    BaseMotor.start = function(self)
+        if not self._connection then
+            self._connection = RunService.RenderStepped:Connect(function(dt) self:step(dt) end)
+        end
+    end
+    BaseMotor.stop = function(self)
+        if self._connection then self._connection:Disconnect() self._connection = nil end
+    end
+    BaseMotor.destroy = BaseMotor.stop
+    BaseMotor.step = noop
+    BaseMotor.getValue = noop
+    BaseMotor.setGoal = noop
+    
+    local SingleMotor = setmetatable({}, BaseMotor)
+    SingleMotor.__index = SingleMotor
+    function SingleMotor.new(initialValue, useImplicitConnections)
+        local self = setmetatable(BaseMotor.new(), SingleMotor)
+        self._useImplicitConnections = useImplicitConnections == nil and true or useImplicitConnections
+        self._goal = nil
+        self._state = { complete = true, value = initialValue }
+        return self
+    end
+    function SingleMotor:step(dt)
+        if self._state.complete then return true end
+        local newState = self._goal:step(self._state, dt)
+        self._state = newState
+        self._onStep:fire(newState.value)
+        if newState.complete then
+            if self._useImplicitConnections then self:stop() end
+            self._onComplete:fire()
+        end
+        return newState.complete
+    end
+    function SingleMotor:getValue() return self._state.value end
+    function SingleMotor:setGoal(goal)
+        self._state.complete = false
+        self._goal = goal
+        self._onStart:fire()
+        if self._useImplicitConnections then self:start() end
+    end
+    
+    local GroupMotor = setmetatable({}, BaseMotor)
+    GroupMotor.__index = GroupMotor
+    function GroupMotor.new(initialValues, useImplicitConnections)
+        local self = setmetatable(BaseMotor.new(), GroupMotor)
+        self._useImplicitConnections = useImplicitConnections == nil and true or useImplicitConnections
+        self._complete = true
+        self._motors = {}
+        for k, v in pairs(initialValues) do
+            if isMotor(v) then self._motors[k] = v
+            elseif typeof(v) == "number" then self._motors[k] = SingleMotor.new(v, false)
+            elseif typeof(v) == "table" then self._motors[k] = GroupMotor.new(v, false)
+            else error("Unsupported type for motor: " .. typeof(v)) end
+        end
+        return self
+    end
+    function GroupMotor:step(dt)
+        if self._complete then return true end
+        local allComplete = true
+        for _, m in pairs(self._motors) do if not m:step(dt) then allComplete = false end end
+        self._onStep:fire(self:getValue())
+        if allComplete then
+            if self._useImplicitConnections then self:stop() end
+            self._complete = true
+            self._onComplete:fire()
+        end
+        return allComplete
+    end
+    function GroupMotor:setGoal(goals)
+        self._complete = false
+        self._onStart:fire()
+        for k, g in pairs(goals) do
+            local motor = self._motors[k]
+            if motor then motor:setGoal(g) end
+        end
+        if self._useImplicitConnections then self:start() end
+    end
+    function GroupMotor:getValue()
+        local out = {}
+        for k, m in pairs(self._motors) do out[k] = m:getValue() end
+        return out
+    end
+    
+    local Instant = {}
+    function Instant.new(target) return setmetatable({ _target = target }, { __index = function(t, k) if k == "step" then return function() return { complete = true, value = t._target } end end end }) end
+    
+    local Spring = {}
+    function Spring.new(target, opts)
+        opts = opts or {}
+        return setmetatable({ _target = target, _freq = opts.frequency or 4, _damp = opts.dampingRatio or 1 }, {
+            __index = function(t, k)
+                if k == "step" then
+                    return function(state, dt)
+                        local d = t._damp
+                        local f = t._freq * 2 * math.pi
+                        local g = t._target
+                        local p0 = state.value
+                        local v0 = state.velocity or 0
+                        local offset = p0 - g
+                        local decay = math.exp(-d * f * dt)
+                        local p1, v1
+                        if d == 1 then
+                            p1 = (offset * (1 + f * dt) + v0 * dt) * decay + g
+                            v1 = (v0 * (1 - f * dt) - offset * (f * f * dt)) * decay
+                        elseif d < 1 then
+                            local c = math.sqrt(1 - d * d)
+                            local i = math.cos(f * c * dt)
+                            local j = math.sin(f * c * dt)
+                            local z = j / c
+                            local y = j / (f * c)
+                            p1 = (offset * (i + d * z) + v0 * y) * decay + g
+                            v1 = (v0 * (i - z * d) - offset * (z * f)) * decay
+                        else
+                            local c = math.sqrt(d * d - 1)
+                            local r1 = -f * (d - c)
+                            local r2 = -f * (d + c)
+                            local co2 = (v0 - offset * r1) / (2 * f * c)
+                            local co1 = offset - co2
+                            local e1 = co1 * math.exp(r1 * dt)
+                            local e2 = co2 * math.exp(r2 * dt)
+                            p1 = e1 + e2 + g
+                            v1 = e1 * r1 + e2 * r2
+                        end
+                        local complete = math.abs(v1) < 0.001 and math.abs(p1 - g) < 0.001
+                        return { complete = complete, value = complete and g or p1, velocity = v1 }
+                    end
+                end
+            end
+        })
+    end
+    
+    Flipper = {
+        SingleMotor = SingleMotor,
+        GroupMotor = GroupMotor,
+        Instant = Instant,
+        Spring = Spring,
+        isMotor = isMotor,
+    }
+end
+
+-- ============================================================
+-- 4. CREATOR (СОЗДАНИЕ ОБЪЕКТОВ С ТЕМАМИ M3)
+-- ============================================================
+
+local Creator = {}
+Library.Creator = Creator
+
+local function getColor(name)
+    return MaterialYou.GetColor(name)
+end
+
+-- Сопоставление Material You цветов для элементов
+local M3Colors = {
+    primary = "primary",
+    onPrimary = "onPrimary",
+    primaryContainer = "primaryContainer",
+    onPrimaryContainer = "onPrimaryContainer",
+    secondary = "secondary",
+    onSecondary = "onSecondary",
+    secondaryContainer = "secondaryContainer",
+    onSecondaryContainer = "onSecondaryContainer",
+    surface = "surface",
+    onSurface = "onSurface",
+    surfaceVariant = "surfaceVariant",
+    onSurfaceVariant = "onSurfaceVariant",
+    background = "background",
+    onBackground = "onBackground",
+    outline = "outline",
+    outlineVariant = "outlineVariant",
+    shadow = "shadow",
+    error = "error",
+    onError = "onError",
+    errorContainer = "errorContainer",
+    onErrorContainer = "onErrorContainer",
+}
+
+-- Текущие теги для быстрого доступа
+Creator.ColorMap = {}
+
+function Creator.UpdateTheme()
+    -- Обновляем все зарегистрированные объекты
+    for obj, data in pairs(Creator.Registry or {}) do
+        for prop, colorKey in pairs(data.properties) do
+            local color = getColor(colorKey)
+            if color then
+                obj[prop] = color
+            end
+        end
+    end
+    
+    -- Обновляем моторы прозрачности
+    for _, motor in pairs(Creator.TransparencyMotors or {}) do
+        motor:setGoal(Flipper.Instant.new(0.0)) -- Material You не использует прозрачность
+    end
+end
+
+Creator.Registry = {}
+Creator.Signals = {}
+Creator.TransparencyMotors = {}
+
+function Creator.AddThemeObject(obj, props)
+    if not Creator.Registry then Creator.Registry = {} end
+    Creator.Registry[obj] = { properties = props }
+    Creator.UpdateTheme()
     return obj
 end
 
-local function createRipple(parent, color)
-    local ripple = createUIElement("Frame", {
-        Size = UDim2.new(0, 0, 0, 0),
-        Position = UDim2.new(0.5, 0, 0.5, 0),
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundColor3 = color or Color3.fromRGB(255,255,255),
-        BackgroundTransparency = 0.8,
-        BorderSizePixel = 0,
-        ZIndex = 999,
-    }, {
-        createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-    })
-    ripple.Parent = parent
-    return ripple
-end
-
-local function animateRipple(ripple, size)
-    local tween = TweenService:Create(ripple, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-        Size = UDim2.new(0, size, 0, size),
-        BackgroundTransparency = 1,
-    })
-    tween:Play()
-    tween.Completed:Connect(function()
-        ripple:Destroy()
-    end)
-end
-
--- // ====== THEMES ====== //
-
-local Themes = {
-    Default = {
-        name = "Default",
-        primary = Color3.fromRGB(187, 134, 252),
-        surface = Color3.fromRGB(30, 30, 30),
-        surfaceContainer = Color3.fromRGB(43, 43, 43),
-        surfaceVariant = Color3.fromRGB(58, 58, 58),
-        onSurface = Color3.fromRGB(227, 227, 227),
-        onSurfaceVariant = Color3.fromRGB(160, 160, 160),
-        outline = Color3.fromRGB(94, 94, 94),
-        outlineVariant = Color3.fromRGB(58, 58, 58),
-    },
-    Red = {
-        name = "Red",
-        primary = Color3.fromRGB(244, 67, 54),
-        surface = Color3.fromRGB(30, 30, 30),
-        surfaceContainer = Color3.fromRGB(43, 43, 43),
-        surfaceVariant = Color3.fromRGB(58, 58, 58),
-        onSurface = Color3.fromRGB(227, 227, 227),
-        onSurfaceVariant = Color3.fromRGB(160, 160, 160),
-        outline = Color3.fromRGB(94, 94, 94),
-        outlineVariant = Color3.fromRGB(58, 58, 58),
-    },
-    Orange = {
-        name = "Orange",
-        primary = Color3.fromRGB(255, 152, 0),
-        surface = Color3.fromRGB(30, 30, 30),
-        surfaceContainer = Color3.fromRGB(43, 43, 43),
-        surfaceVariant = Color3.fromRGB(58, 58, 58),
-        onSurface = Color3.fromRGB(227, 227, 227),
-        onSurfaceVariant = Color3.fromRGB(160, 160, 160),
-        outline = Color3.fromRGB(94, 94, 94),
-        outlineVariant = Color3.fromRGB(58, 58, 58),
-    },
-    Yellow = {
-        name = "Yellow",
-        primary = Color3.fromRGB(255, 235, 59),
-        surface = Color3.fromRGB(30, 30, 30),
-        surfaceContainer = Color3.fromRGB(43, 43, 43),
-        surfaceVariant = Color3.fromRGB(58, 58, 58),
-        onSurface = Color3.fromRGB(227, 227, 227),
-        onSurfaceVariant = Color3.fromRGB(160, 160, 160),
-        outline = Color3.fromRGB(94, 94, 94),
-        outlineVariant = Color3.fromRGB(58, 58, 58),
-    },
-    Green = {
-        name = "Green",
-        primary = Color3.fromRGB(76, 175, 80),
-        surface = Color3.fromRGB(30, 30, 30),
-        surfaceContainer = Color3.fromRGB(43, 43, 43),
-        surfaceVariant = Color3.fromRGB(58, 58, 58),
-        onSurface = Color3.fromRGB(227, 227, 227),
-        onSurfaceVariant = Color3.fromRGB(160, 160, 160),
-        outline = Color3.fromRGB(94, 94, 94),
-        outlineVariant = Color3.fromRGB(58, 58, 58),
-    },
-    Teal = {
-        name = "Teal",
-        primary = Color3.fromRGB(0, 150, 136),
-        surface = Color3.fromRGB(30, 30, 30),
-        surfaceContainer = Color3.fromRGB(43, 43, 43),
-        surfaceVariant = Color3.fromRGB(58, 58, 58),
-        onSurface = Color3.fromRGB(227, 227, 227),
-        onSurfaceVariant = Color3.fromRGB(160, 160, 160),
-        outline = Color3.fromRGB(94, 94, 94),
-        outlineVariant = Color3.fromRGB(58, 58, 58),
-    },
-    Blue = {
-        name = "Blue",
-        primary = Color3.fromRGB(33, 150, 243),
-        surface = Color3.fromRGB(30, 30, 30),
-        surfaceContainer = Color3.fromRGB(43, 43, 43),
-        surfaceVariant = Color3.fromRGB(58, 58, 58),
-        onSurface = Color3.fromRGB(227, 227, 227),
-        onSurfaceVariant = Color3.fromRGB(160, 160, 160),
-        outline = Color3.fromRGB(94, 94, 94),
-        outlineVariant = Color3.fromRGB(58, 58, 58),
-    },
-    Pink = {
-        name = "Pink",
-        primary = Color3.fromRGB(233, 30, 99),
-        surface = Color3.fromRGB(30, 30, 30),
-        surfaceContainer = Color3.fromRGB(43, 43, 43),
-        surfaceVariant = Color3.fromRGB(58, 58, 58),
-        onSurface = Color3.fromRGB(227, 227, 227),
-        onSurfaceVariant = Color3.fromRGB(160, 160, 160),
-        outline = Color3.fromRGB(94, 94, 94),
-        outlineVariant = Color3.fromRGB(58, 58, 58),
-    },
-}
-
--- // ====== HYPERION WINDOW ====== //
-
-local HyperionWindow = {}
-HyperionWindow.__index = HyperionWindow
-
-function HyperionWindow.new(config)
-    local self = setmetatable({}, HyperionWindow)
-    
-    self.title = config.Title or "Hyperion"
-    self.size = config.Size or UDim2.new(0, 600, 0, 450)
-    self.themeName = config.Theme or "Default"
-    self.theme = Themes[self.themeName] or Themes.Default
-    self.acrylic = config.Acrylic or false
-    self.minimized = false
-    self.tabs = {}
-    self.activeTab = nil
-    self.elements = {}
-    self.log = {}
-    self.config = config
-    
-    self.gui = createUIElement("ScreenGui", {
-        Parent = LocalPlayer:WaitForChild("PlayerGui"),
-        ResetOnSpawn = false,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    })
-    if syn and syn.protect_gui then syn.protect_gui(self.gui) end
-    
-    self.root = createUIElement("Frame", {
-        Parent = self.gui,
-        Size = self.size,
-        Position = UDim2.new(0.5, -self.size.X.Offset/2, 0.5, -self.size.Y.Offset/2),
-        BackgroundColor3 = self.theme.surface,
-        BackgroundTransparency = self.acrylic and 0.15 or 0,
-        BorderSizePixel = 0,
-        ClipsDescendants = true,
-    }, {
-        createUIElement("UICorner", { CornerRadius = UDim.new(0, 12) }),
-        createUIElement("UIStroke", {
-            Color = self.theme.outlineVariant,
-            Transparency = 0.5,
-            Thickness = 1,
-        }),
-    })
-    
-    if self.acrylic then
-        local blur = createUIElement("Frame", {
-            Parent = self.root,
-            Size = UDim2.fromScale(1, 1),
-            BackgroundColor3 = Color3.fromRGB(255,255,255),
-            BackgroundTransparency = 0.98,
-            BorderSizePixel = 0,
-        }, {
-            createUIElement("UICorner", { CornerRadius = UDim.new(0, 12) }),
-        })
-        self.blur = blur
+function Creator.OverrideTag(obj, props)
+    if Creator.Registry[obj] then
+        Creator.Registry[obj].properties = props
+        Creator.UpdateTheme()
     end
+end
+
+function Creator.AddSignal(signal, func)
+    local conn = signal:Connect(func)
+    table.insert(Creator.Signals, conn)
+    return conn
+end
+
+function Creator.Disconnect()
+    for _, conn in pairs(Creator.Signals) do
+        conn:Disconnect()
+    end
+    Creator.Signals = {}
+end
+
+function Creator.New(className, props, children)
+    local obj = Instance.new(className)
     
-    self.titleBar = createUIElement("Frame", {
-        Parent = self.root,
-        Size = UDim2.new(1, 0, 0, 40),
-        BackgroundTransparency = 1,
-    }, {
-        createUIElement("TextLabel", {
-            Text = self.title,
-            TextColor3 = self.theme.onSurface,
-            TextSize = 16,
-            Font = Enum.Font.Gotham,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            BackgroundTransparency = 1,
-            Position = UDim2.new(0, 12, 0, 0),
-            Size = UDim2.new(1, -100, 1, 0),
-        }),
-        createUIElement("TextButton", {
-            Text = "✕",
-            TextColor3 = self.theme.onSurfaceVariant,
-            TextSize = 16,
-            BackgroundTransparency = 1,
-            Position = UDim2.new(1, -36, 0, 4),
-            Size = UDim2.new(0, 28, 0, 32),
-            Font = Enum.Font.Gotham,
-            ZIndex = 2,
-        }, {
-            createUIElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
-        }),
-        createUIElement("TextButton", {
-            Text = "—",
-            TextColor3 = self.theme.onSurfaceVariant,
-            TextSize = 20,
-            BackgroundTransparency = 1,
-            Position = UDim2.new(1, -68, 0, 4),
-            Size = UDim2.new(0, 28, 0, 32),
-            Font = Enum.Font.Gotham,
-            ZIndex = 2,
-        }, {
-            createUIElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
-        }),
-        createUIElement("Frame", {
-            Size = UDim2.new(1, 0, 0, 1),
-            Position = UDim2.new(0, 0, 1, 0),
-            BackgroundColor3 = self.theme.outlineVariant,
-            BackgroundTransparency = 0.5,
+    -- Применяем дефолтные свойства (Material You стиль)
+    local defaults = {
+        Frame = {
+            BackgroundColor3 = getColor("surface"),
+            BackgroundTransparency = 0,
             BorderSizePixel = 0,
-        }),
-    })
-    
-    self.tabContainer = createUIElement("Frame", {
-        Parent = self.root,
-        Size = UDim2.new(0, 160, 1, -40),
-        Position = UDim2.new(0, 0, 0, 40),
-        BackgroundTransparency = 1,
-        ClipsDescendants = true,
-    }, {
-        createUIElement("UIListLayout", {
-            Padding = UDim.new(0, 4),
-            SortOrder = Enum.SortOrder.LayoutOrder,
-        }),
-        createUIElement("UIPadding", {
-            PaddingLeft = UDim.new(0, 8),
-            PaddingRight = UDim.new(0, 8),
-            PaddingTop = UDim.new(0, 8),
-            PaddingBottom = UDim.new(0, 8),
-        }),
-    })
-    
-    self.contentContainer = createUIElement("Frame", {
-        Parent = self.root,
-        Size = UDim2.new(1, -180, 1, -60),
-        Position = UDim2.new(0, 172, 0, 52),
-        BackgroundTransparency = 1,
-        ClipsDescendants = true,
-    })
-    
-    self.content = createUIElement("ScrollingFrame", {
-        Parent = self.contentContainer,
-        Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ScrollBarThickness = 4,
-        ScrollBarImageColor3 = self.theme.outline,
-        ScrollBarImageTransparency = 0.5,
-    }, {
-        createUIElement("UIListLayout", {
-            Padding = UDim.new(0, 6),
-            SortOrder = Enum.SortOrder.LayoutOrder,
-        }),
-        createUIElement("UIPadding", {
-            PaddingLeft = UDim.new(0, 4),
-            PaddingRight = UDim.new(0, 4),
-            PaddingTop = UDim.new(0, 4),
-            PaddingBottom = UDim.new(0, 4),
-        }),
-    })
-    
-    self.logger = createUIElement("Frame", {
-        Parent = self.root,
-        Size = UDim2.new(0, 400, 0, 200),
-        Position = UDim2.new(0.5, -200, 0.5, -100),
-        BackgroundColor3 = self.theme.surfaceContainer,
-        BackgroundTransparency = 0.05,
-        Visible = false,
-        ZIndex = 100,
-    }, {
-        createUIElement("UICorner", { CornerRadius = UDim.new(0, 12) }),
-        createUIElement("UIStroke", {
-            Color = self.theme.outlineVariant,
-            Transparency = 0.5,
-            Thickness = 1,
-        }),
-        createUIElement("TextLabel", {
-            Text = "📋 Log",
-            TextColor3 = self.theme.onSurface,
-            TextSize = 16,
-            Font = Enum.Font.Gotham,
+        },
+        TextLabel = {
             BackgroundTransparency = 1,
-            Position = UDim2.new(0, 12, 0, 8),
-            Size = UDim2.new(1, -24, 0, 24),
-            TextXAlignment = Enum.TextXAlignment.Left,
-        }),
-        createUIElement("TextButton", {
-            Text = "✕",
-            TextColor3 = self.theme.onSurfaceVariant,
-            TextSize = 16,
+            Font = Enum.Font.GothamSSm,
+            TextColor3 = getColor("onSurface"),
+            TextSize = 14,
+            RichText = true,
+        },
+        TextButton = {
             BackgroundTransparency = 1,
-            Position = UDim2.new(1, -36, 0, 4),
-            Size = UDim2.new(0, 28, 0, 32),
-            Font = Enum.Font.Gotham,
-            ZIndex = 2,
-        }),
-        createUIElement("ScrollingFrame", {
-            Parent = self.logger,
-            Size = UDim2.new(1, -24, 1, -60),
-            Position = UDim2.new(0, 12, 0, 40),
+            Font = Enum.Font.GothamSSm,
+            TextColor3 = getColor("onSurface"),
+            TextSize = 14,
+            AutoButtonColor = false,
+            RichText = true,
+        },
+        TextBox = {
+            BackgroundTransparency = 1,
+            Font = Enum.Font.GothamSSm,
+            TextColor3 = getColor("onSurface"),
+            TextSize = 14,
+            ClearTextOnFocus = false,
+            RichText = true,
+        },
+        ImageLabel = {
+            BackgroundTransparency = 1,
+        },
+        ImageButton = {
+            BackgroundTransparency = 1,
+            AutoButtonColor = false,
+        },
+        ScrollingFrame = {
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
             ScrollBarThickness = 4,
-            ScrollBarImageColor3 = self.theme.outline,
-            ScrollBarImageTransparency = 0.5,
-        }, {
-            createUIElement("UIListLayout", {
-                Padding = UDim.new(0, 2),
-                SortOrder = Enum.SortOrder.LayoutOrder,
-            }),
-        }),
-        createUIElement("TextButton", {
-            Text = "Copy",
-            TextColor3 = self.theme.onPrimary,
-            TextSize = 12,
-            Font = Enum.Font.Gotham,
-            BackgroundColor3 = self.theme.primary,
-            Position = UDim2.new(1, -80, 1, -36),
-            Size = UDim2.new(0, 64, 0, 28),
-        }, {
-            createUIElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
-        }),
-        createUIElement("TextButton", {
-            Text = "Clear",
-            TextColor3 = self.theme.onSurface,
-            TextSize = 12,
-            Font = Enum.Font.Gotham,
-            BackgroundColor3 = self.theme.surfaceVariant,
-            Position = UDim2.new(1, -152, 1, -36),
-            Size = UDim2.new(0, 64, 0, 28),
-        }, {
-            createUIElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
-        }),
-    })
-    
-    self.dragging = false
-    self.dragStart = nil
-    self.dragOffset = nil
-    
-    self.titleBar.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            self.dragging = true
-            self.dragStart = input.Position
-            self.dragOffset = self.root.Position
-        end
-    end)
-    
-    self.titleBar.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            self.dragging = false
-        end
-    end)
-    
-    RunService.RenderStepped:Connect(function()
-        if self.dragging and self.dragStart and self.dragOffset then
-            local delta = Mouse.X - self.dragStart.X, Mouse.Y - self.dragStart.Y
-            self.root.Position = UDim2.new(0, self.dragOffset.X.Offset + delta, 0, self.dragOffset.Y.Offset + delta)
-        end
-    end)
-    
-    local closeBtn = self.titleBar:FindFirstChildOfClass("TextButton")
-    if closeBtn then
-        closeBtn.MouseButton1Click:Connect(function()
-            self:destroy()
-        end)
-    end
-    
-    local minBtn = self.titleBar:FindLastChild("TextButton")
-    if minBtn then
-        minBtn.MouseButton1Click:Connect(function()
-            self.minimized = not self.minimized
-            self.root.Visible = not self.minimized
-        end)
-    end
-    
-    self:addLog("Window created: " .. self.title)
-    
-    return self
-end
-
-function HyperionWindow:setTheme(themeName)
-    local theme = Themes[themeName]
-    if not theme then return end
-    self.theme = theme
-    self.themeName = themeName
-    
-    self.root.BackgroundColor3 = theme.surface
-    for _, child in pairs(self.root:GetDescendants()) do
-        if child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox") then
-            if child.Name ~= "Title" and child.Name ~= "Desc" then
-                if child.TextColor3 == self.theme.onSurface then
-                    child.TextColor3 = theme.onSurface
-                elseif child.TextColor3 == self.theme.onSurfaceVariant then
-                    child.TextColor3 = theme.onSurfaceVariant
-                end
-            end
-        end
-        if child:IsA("Frame") and child.BackgroundColor3 == self.theme.surfaceContainer then
-            child.BackgroundColor3 = theme.surfaceContainer
-        end
-        if child:IsA("UIStroke") then
-            child.Color = theme.outlineVariant
-        end
-    end
-    self:addLog("Theme changed to: " .. theme.name)
-end
-
-function HyperionWindow:addTab(name, icon)
-    local tab = {}
-    tab.name = name
-    tab.icon = icon
-    tab.elements = {}
-    tab.sections = {}
-    
-    local btn = createUIElement("TextButton", {
-        Parent = self.tabContainer,
-        Size = UDim2.new(1, 0, 0, 36),
-        BackgroundColor3 = self.theme.surfaceContainer,
-        BackgroundTransparency = 0.9,
-        Text = "",
-        ZIndex = 2,
-    }, {
-        createUIElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
-        createUIElement("TextLabel", {
-            Text = name,
-            TextColor3 = self.theme.onSurfaceVariant,
-            TextSize = 13,
-            Font = Enum.Font.Gotham,
-            BackgroundTransparency = 1,
-            Position = UDim2.new(0, 12, 0, 0),
-            Size = UDim2.new(1, -24, 1, 0),
-            TextXAlignment = Enum.TextXAlignment.Left,
-            Name = "Title",
-        }),
-        createUIElement("Frame", {
-            Size = UDim2.new(0, 3, 0, 20),
-            Position = UDim2.new(0, 0, 0.5, 0),
-            AnchorPoint = Vector2.new(0, 0.5),
-            BackgroundColor3 = self.theme.primary,
+            ScrollBarImageTransparency = 0.7,
+            ScrollBarImageColor3 = getColor("outlineVariant"),
+        },
+        CanvasGroup = {
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
-            Name = "Indicator",
-        }, {
-            createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-        }),
-    })
+        },
+        ScreenGui = {
+            ResetOnSpawn = false,
+            ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        },
+    }
     
-    local container = createUIElement("ScrollingFrame", {
-        Parent = self.content,
-        Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ScrollBarThickness = 4,
-        ScrollBarImageColor3 = self.theme.outline,
-        ScrollBarImageTransparency = 0.5,
-        Visible = false,
-    }, {
-        createUIElement("UIListLayout", {
-            Padding = UDim.new(0, 6),
-            SortOrder = Enum.SortOrder.LayoutOrder,
-        }),
-        createUIElement("UIPadding", {
-            PaddingLeft = UDim.new(0, 4),
-            PaddingRight = UDim.new(0, 4),
-            PaddingTop = UDim.new(0, 4),
-            PaddingBottom = UDim.new(0, 4),
-        }),
-    })
+    if defaults[className] then
+        for k, v in pairs(defaults[className]) do
+            if obj[k] ~= nil then obj[k] = v end
+        end
+    end
     
-    tab.btn = btn
-    tab.container = container
+    -- Применяем пользовательские свойства
+    if props then
+        for k, v in pairs(props) do
+            if k ~= "ThemeTag" then
+                obj[k] = v
+            end
+        end
+    end
     
-    btn.MouseButton1Click:Connect(function()
-        self:selectTab(tab)
+    -- Применяем теги
+    if props and props.ThemeTag then
+        Creator.AddThemeObject(obj, props.ThemeTag)
+    end
+    
+    -- Добавляем дочерние объекты
+    if children then
+        for _, child in pairs(children) do
+            child.Parent = obj
+        end
+    end
+    
+    return obj
+end
+
+function Creator.SpringMotor(initial, instance, prop, ignoreDialog, resetOnTheme)
+    local motor = Flipper.SingleMotor.new(initial)
+    motor:onStep(function(value)
+        instance[prop] = value
     end)
-    
-    if #self.tabs == 0 then
-        self:selectTab(tab)
+    if resetOnTheme then
+        table.insert(Creator.TransparencyMotors, motor)
     end
-    
-    table.insert(self.tabs, tab)
-    self:addLog("Tab added: " .. name)
-    
-    local tabApi = {}
-    
-    function tabApi:addSection(title)
-        local section = {}
-        section.title = title
-        section.elements = {}
-        
-        local header = createUIElement("TextLabel", {
-            Parent = container,
-            Text = title,
-            TextColor3 = self.theme.onSurface,
-            TextSize = 18,
-            Font = Enum.Font.GothamBold,
-            BackgroundTransparency = 1,
-            Size = UDim2.new(1, 0, 0, 28),
-            TextXAlignment = Enum.TextXAlignment.Left,
-            Name = "SectionHeader",
-        })
-        
-        local frame = createUIElement("Frame", {
-            Parent = container,
-            Size = UDim2.new(1, 0, 0, 0),
-            BackgroundTransparency = 1,
-        }, {
-            createUIElement("UIListLayout", {
-                Padding = UDim.new(0, 4),
-                SortOrder = Enum.SortOrder.LayoutOrder,
-            }),
-        })
-        
-        section.frame = frame
-        section.header = header
-        
-        local function addElement(elementType, config)
-            local element = {}
-            
-            local bg = createUIElement("Frame", {
-                Parent = frame,
-                Size = UDim2.new(1, 0, 0, 0),
-                BackgroundColor3 = self.theme.surfaceContainer,
-                BackgroundTransparency = 0.9,
-                AutomaticSize = Enum.AutomaticSize.Y,
-                BorderSizePixel = 0,
-            }, {
-                createUIElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
-                createUIElement("UIStroke", {
-                    Color = self.theme.outlineVariant,
-                    Transparency = 0.5,
-                    Thickness = 1,
-                }),
-                createUIElement("UIPadding", {
-                    PaddingLeft = UDim.new(0, 12),
-                    PaddingRight = UDim.new(0, 12),
-                    PaddingTop = UDim.new(0, 10),
-                    PaddingBottom = UDim.new(0, 10),
-                }),
-            })
-            
-            local headerFrame = createUIElement("Frame", {
-                Parent = bg,
-                Size = UDim2.new(1, 0, 0, 24),
-                BackgroundTransparency = 1,
-            }, {
-                createUIElement("UIListLayout", {
-                    Padding = UDim.new(0, 8),
-                    FillDirection = Enum.FillDirection.Horizontal,
-                    VerticalAlignment = Enum.VerticalAlignment.Center,
-                }),
-            })
-            
-            if config.Icon then
-                local iconLabel = createUIElement("TextLabel", {
-                    Parent = headerFrame,
-                    Text = config.Icon,
-                    TextColor3 = self.theme.primary,
-                    TextSize = 18,
-                    Font = Enum.Font.Gotham,
-                    BackgroundTransparency = 1,
-                    Size = UDim2.new(0, 24, 0, 24),
-                    TextXAlignment = Enum.TextXAlignment.Center,
-                })
-                element.icon = iconLabel
-            end
-            
-            local titleLabel = createUIElement("TextLabel", {
-                Parent = headerFrame,
-                Text = config.Title or "Element",
-                TextColor3 = self.theme.onSurface,
-                TextSize = 14,
-                Font = Enum.Font.Gotham,
-                BackgroundTransparency = 1,
-                Size = UDim2.new(0, 0, 0, 24),
-                AutomaticSize = Enum.AutomaticSize.X,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Name = "Title",
-            })
-            element.titleLabel = titleLabel
-            
-            if config.Description then
-                local descLabel = createUIElement("TextLabel", {
-                    Parent = bg,
-                    Text = config.Description,
-                    TextColor3 = self.theme.onSurfaceVariant,
-                    TextSize = 12,
-                    Font = Enum.Font.Gotham,
-                    BackgroundTransparency = 1,
-                    Size = UDim2.new(1, 0, 0, 18),
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                    TextWrapped = true,
-                    Name = "Desc",
-                })
-                element.descLabel = descLabel
-            end
-            
-            local controlFrame = createUIElement("Frame", {
-                Parent = bg,
-                Size = UDim2.new(0, 0, 0, 0),
-                Position = UDim2.new(1, 0, 0, 0),
-                AnchorPoint = Vector2.new(1, 0),
-                BackgroundTransparency = 1,
-                AutomaticSize = Enum.AutomaticSize.XY,
-            })
-            element.control = controlFrame
-            
-            local function updateLayout()
-                local totalHeight = 24
-                if config.Description then totalHeight = totalHeight + 18 end
-                local controlHeight = 24
-                if controlFrame.Size.Y.Offset > 24 then controlHeight = controlFrame.Size.Y.Offset end
-                if controlHeight > totalHeight then totalHeight = controlHeight end
-                bg.Size = UDim2.new(1, 0, 0, totalHeight + 20)
-            end
-            
-            bg:GetPropertyChangedSignal("Size"):Connect(updateLayout)
-            task.wait()
-            updateLayout()
-            
-            local elementApi = {}
-            
-            elementApi.setTitle = function(text)
-                titleLabel.Text = text
-            end
-            
-            elementApi.setDesc = function(text)
-                if descLabel then
-                    descLabel.Text = text
-                end
-            end
-            
-            elementApi.setVisible = function(visible)
-                bg.Visible = visible
-            end
-            
-            elementApi.destroy = function()
-                bg:Destroy()
-            end
-            
-            table.insert(section.elements, elementApi)
-            self:addLog("Element added: " .. config.Title)
-            
-            return elementApi
-        end
-        
-        function section:addButton(config)
-            local btn = addElement("Button", config)
-            
-            local button = createUIElement("TextButton", {
-                Parent = btn.control,
-                Text = config.Text or "Click",
-                TextColor3 = self.theme.onPrimary,
-                TextSize = 13,
-                Font = Enum.Font.Gotham,
-                BackgroundColor3 = self.theme.primary,
-                Size = UDim2.new(0, 80, 0, 28),
-                Position = UDim2.new(0, 0, 0.5, 0),
-                AnchorPoint = Vector2.new(0, 0.5),
-                AutomaticSize = Enum.AutomaticSize.X,
-            }, {
-                createUIElement("UIPadding", {
-                    PaddingLeft = UDim.new(0, 16),
-                    PaddingRight = UDim.new(0, 16),
-                }),
-                createUIElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
-            })
-            
-            btn.control.Size = UDim2.new(0, 0, 0, 28)
-            
-            button.MouseButton1Click:Connect(function()
-                if config.Callback then
-                    config.Callback()
-                end
-                local ripple = createRipple(button, self.theme.primary)
-                local size = button.AbsoluteSize.X * 1.5
-                animateRipple(ripple, size)
-                self:addLog("Button clicked: " .. config.Title)
-            end)
-            
-            return btn
-        end
-        
-        function section:addToggle(config)
-            local toggle = addElement("Toggle", config)
-            toggle.value = config.Default or false
-            toggle.callbacks = {}
-            
-            local frame = createUIElement("Frame", {
-                Parent = toggle.control,
-                Size = UDim2.new(0, 44, 0, 22),
-                Position = UDim2.new(0, 0, 0.5, 0),
-                AnchorPoint = Vector2.new(0, 0.5),
-                BackgroundColor3 = self.theme.outlineVariant,
-                BackgroundTransparency = 0.3,
-            }, {
-                createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                createUIElement("Frame", {
-                    Name = "Thumb",
-                    Size = UDim2.new(0, 18, 0, 18),
-                    Position = UDim2.new(0, 2, 0.5, 0),
-                    AnchorPoint = Vector2.new(0, 0.5),
-                    BackgroundColor3 = self.theme.onSurface,
-                    BackgroundTransparency = 0.8,
-                }, {
-                    createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                }),
-            })
-            
-            toggle.control.Size = UDim2.new(0, 44, 0, 22)
-            
-            local thumb = frame:FindFirstChild("Thumb")
-            
-            function toggle:setValue(value)
-                self.value = value
-                local targetPos = value and UDim2.new(0, 24, 0.5, 0) or UDim2.new(0, 2, 0.5, 0)
-                local targetColor = value and self.theme.primary or self.theme.outlineVariant
-                TweenService:Create(thumb, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                    Position = targetPos,
-                }):Play()
-                TweenService:Create(frame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                    BackgroundColor3 = targetColor,
-                }):Play()
-                for _, callback in pairs(self.callbacks) do
-                    callback(value)
-                end
-                if config.Callback then
-                    config.Callback(value)
-                end
-                self:addLog("Toggle changed: " .. config.Title .. " = " .. tostring(value))
-            end
-            
-            function toggle:OnChanged(callback)
-                table.insert(self.callbacks, callback)
-                callback(self.value)
-            end
-            
-            frame.MouseButton1Click:Connect(function()
-                toggle:setValue(not toggle.value)
-            end)
-            
-            toggle:setValue(toggle.value)
-            
-            return toggle
-        end
-        
-        function section:addSlider(config)
-            local slider = addElement("Slider", config)
-            slider.value = config.Default or 0
-            slider.min = config.Min or 0
-            slider.max = config.Max or 100
-            slider.rounding = config.Rounding or 0
-            slider.callbacks = {}
-            
-            local frame = createUIElement("Frame", {
-                Parent = slider.control,
-                Size = UDim2.new(0, 120, 0, 28),
-                Position = UDim2.new(0, 0, 0.5, 0),
-                AnchorPoint = Vector2.new(0, 0.5),
-                BackgroundTransparency = 1,
-            }, {
-                createUIElement("Frame", {
-                    Name = "Rail",
-                    Size = UDim2.new(1, 0, 0, 4),
-                    Position = UDim2.new(0, 0, 0.5, 0),
-                    AnchorPoint = Vector2.new(0, 0.5),
-                    BackgroundColor3 = self.theme.outlineVariant,
-                    BackgroundTransparency = 0.3,
-                }, {
-                    createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                    createUIElement("Frame", {
-                        Name = "Fill",
-                        Size = UDim2.new(0, 0, 1, 0),
-                        BackgroundColor3 = self.theme.primary,
-                        BorderSizePixel = 0,
-                    }, {
-                        createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                    }),
-                }),
-                createUIElement("TextButton", {
-                    Name = "Thumb",
-                    Size = UDim2.new(0, 16, 0, 16),
-                    Position = UDim2.new(0, 0, 0.5, 0),
-                    AnchorPoint = Vector2.new(0, 0.5),
-                    BackgroundColor3 = self.theme.primary,
-                    BackgroundTransparency = 0.2,
-                    ZIndex = 2,
-                    AutoButtonColor = false,
-                }, {
-                    createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                    createUIElement("UIStroke", {
-                        Color = self.theme.primary,
-                        Transparency = 0.5,
-                        Thickness = 2,
-                    }),
-                }),
-                createUIElement("TextLabel", {
-                    Name = "ValueLabel",
-                    Text = tostring(slider.value),
-                    TextColor3 = self.theme.onSurfaceVariant,
-                    TextSize = 12,
-                    Font = Enum.Font.Gotham,
-                    BackgroundTransparency = 1,
-                    Position = UDim2.new(1, 8, 0.5, 0),
-                    AnchorPoint = Vector2.new(0, 0.5),
-                    Size = UDim2.new(0, 40, 0, 20),
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                }),
-            })
-            
-            slider.control.Size = UDim2.new(0, 120, 0, 28)
-            
-            local rail = frame:FindFirstChild("Rail")
-            local fill = rail and rail:FindFirstChild("Fill")
-            local thumb = frame:FindFirstChild("Thumb")
-            local valueLabel = frame:FindFirstChild("ValueLabel")
-            
-            local function updateSlider(value)
-                local clamped = math.clamp(value, slider.min, slider.max)
-                local rounded = math.round(clamped * 10 ^ slider.rounding) / 10 ^ slider.rounding
-                slider.value = rounded
-                local t = (rounded - slider.min) / (slider.max - slider.min)
-                if fill then
-                    fill.Size = UDim2.new(t, 0, 1, 0)
-                end
-                if thumb then
-                    thumb.Position = UDim2.new(t, -8, 0.5, 0)
-                end
-                if valueLabel then
-                    valueLabel.Text = tostring(rounded)
-                end
-                for _, callback in pairs(slider.callbacks) do
-                    callback(rounded)
-                end
-                if config.Callback then
-                    config.Callback(rounded)
-                end
-                self:addLog("Slider changed: " .. config.Title .. " = " .. tostring(rounded))
-            end
-            
-            function slider:OnChanged(callback)
-                table.insert(self.callbacks, callback)
-                callback(self.value)
-            end
-            
-            local dragging = false
-            
-            thumb.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                    dragging = true
-                end
-            end)
-            
-            thumb.InputEnded:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                    dragging = false
-                end
-            end)
-            
-            frame.InputBegan:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                    local pos = input.Position.X - rail.AbsolutePosition.X
-                    local t = math.clamp(pos / rail.AbsoluteSize.X, 0, 1)
-                    local val = slider.min + (slider.max - slider.min) * t
-                    updateSlider(val)
-                end
-            end)
-            
-            UserInputService.InputChanged:Connect(function(input)
-                if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-                    local pos = input.Position.X - rail.AbsolutePosition.X
-                    local t = math.clamp(pos / rail.AbsoluteSize.X, 0, 1)
-                    local val = slider.min + (slider.max - slider.min) * t
-                    updateSlider(val)
-                end
-            end)
-            
-            updateSlider(slider.value)
-            
-            function slider:setValue(value)
-                updateSlider(value)
-            end
-            
-            return slider
-        end
-        
-        function section:addDropdown(config)
-            local dropdown = addElement("Dropdown", config)
-            dropdown.values = config.Values or {}
-            dropdown.value = config.Default or nil
-            dropdown.callbacks = {}
-            
-            local frame = createUIElement("Frame", {
-                Parent = dropdown.control,
-                Size = UDim2.new(0, 140, 0, 28),
-                Position = UDim2.new(0, 0, 0.5, 0),
-                AnchorPoint = Vector2.new(0, 0.5),
-                BackgroundTransparency = 1,
-            })
-            
-            dropdown.control.Size = UDim2.new(0, 140, 0, 28)
-            
-            local btn = createUIElement("TextButton", {
-                Parent = frame,
-                Size = UDim2.fromScale(1, 1),
-                BackgroundColor3 = self.theme.surfaceVariant,
-                BackgroundTransparency = 0.8,
-                Text = "",
-                AutoButtonColor = false,
-            }, {
-                createUIElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                createUIElement("UIStroke", {
-                    Color = self.theme.outlineVariant,
-                    Transparency = 0.5,
-                    Thickness = 1,
-                }),
-                createUIElement("TextLabel", {
-                    Name = "Display",
-                    Text = config.Default or "Select...",
-                    TextColor3 = self.theme.onSurface,
-                    TextSize = 12,
-                    Font = Enum.Font.Gotham,
-                    BackgroundTransparency = 1,
-                    Position = UDim2.new(0, 8, 0, 0),
-                    Size = UDim2.new(1, -32, 1, 0),
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                }),
-                createUIElement("TextLabel", {
-                    Text = "▼",
-                    TextColor3 = self.theme.onSurfaceVariant,
-                    TextSize = 12,
-                    Font = Enum.Font.Gotham,
-                    BackgroundTransparency = 1,
-                    Position = UDim2.new(1, -20, 0.5, 0),
-                    AnchorPoint = Vector2.new(0, 0.5),
-                    Size = UDim2.new(0, 16, 0, 16),
-                    TextXAlignment = Enum.TextXAlignment.Center,
-                }),
-            })
-            
-            local dropdownFrame = createUIElement("Frame", {
-                Parent = self.root,
-                Size = UDim2.new(0, 140, 0, 0),
-                BackgroundColor3 = self.theme.surface,
-                BackgroundTransparency = 0.05,
-                Visible = false,
-                ZIndex = 50,
-                ClipsDescendants = true,
-            }, {
-                createUIElement("UICorner", { CornerRadius = UDim.new(0, 8) }),
-                createUIElement("UIStroke", {
-                    Color = self.theme.outlineVariant,
-                    Transparency = 0.5,
-                    Thickness = 1,
-                }),
-                createUIElement("ScrollingFrame", {
-                    Size = UDim2.fromScale(1, 1),
-                    BackgroundTransparency = 1,
-                    BorderSizePixel = 0,
-                    ScrollBarThickness = 0,
-                    AutomaticCanvasSize = Enum.AutomaticSize.Y,
-                }, {
-                    createUIElement("UIListLayout", {
-                        Padding = UDim.new(0, 2),
-                        SortOrder = Enum.SortOrder.LayoutOrder,
-                    }),
-                    createUIElement("UIPadding", {
-                        PaddingLeft = UDim.new(0, 4),
-                        PaddingRight = UDim.new(0, 4),
-                        PaddingTop = UDim.new(0, 4),
-                        PaddingBottom = UDim.new(0, 4),
-                    }),
-                }),
-            })
-            
-            local display = btn:FindFirstChild("Display")
-            
-            local function updateDropdown(value)
-                dropdown.value = value
-                if display then
-                    display.Text = value or "Select..."
-                end
-                for _, callback in pairs(dropdown.callbacks) do
-                    callback(value)
-                end
-                if config.Callback then
-                    config.Callback(value)
-                end
-                self:addLog("Dropdown changed: " .. config.Title .. " = " .. tostring(value))
-            end
-            
-            function dropdown:OnChanged(callback)
-                table.insert(self.callbacks, callback)
-                callback(self.value)
-            end
-            
-            local function buildOptions()
-                local scroll = dropdownFrame:FindFirstChildOfClass("ScrollingFrame")
-                if scroll then
-                    for _, child in pairs(scroll:GetChildren()) do
-                        if child:IsA("TextButton") then
-                            child:Destroy()
-                        end
-                    end
-                    for _, value in pairs(dropdown.values) do
-                        local opt = createUIElement("TextButton", {
-                            Parent = scroll,
-                            Size = UDim2.new(1, 0, 0, 28),
-                            BackgroundColor3 = self.theme.surfaceContainer,
-                            BackgroundTransparency = 0.9,
-                            Text = value,
-                            TextColor3 = self.theme.onSurface,
-                            TextSize = 12,
-                            Font = Enum.Font.Gotham,
-                            TextXAlignment = Enum.TextXAlignment.Left,
-                        }, {
-                            createUIElement("UIPadding", {
-                                PaddingLeft = UDim.new(0, 8),
-                            }),
-                            createUIElement("UICorner", { CornerRadius = UDim.new(0, 4) }),
-                        })
-                        opt.MouseButton1Click:Connect(function()
-                            updateDropdown(value)
-                            dropdownFrame.Visible = false
-                        end)
-                    end
-                end
-            end
-            
-            btn.MouseButton1Click:Connect(function()
-                dropdownFrame.Visible = not dropdownFrame.Visible
-                if dropdownFrame.Visible then
-                    local pos = btn.AbsolutePosition
-                    local size = btn.AbsoluteSize
-                    local maxHeight = 200
-                    local totalHeight = #dropdown.values * 30 + 8
-                    local height = math.min(totalHeight, maxHeight)
-                    dropdownFrame.Position = UDim2.new(0, pos.X, 0, pos.Y + size.Y + 2)
-                    dropdownFrame.Size = UDim2.new(0, size.X, 0, height)
-                    buildOptions()
-                    self:addLog("Dropdown opened: " .. config.Title)
-                else
-                    self:addLog("Dropdown closed: " .. config.Title)
-                end
-            end)
-            
-            updateDropdown(dropdown.value)
-            
-            function dropdown:setValue(value)
-                updateDropdown(value)
-            end
-            
-            return dropdown
-        end
-        
-        function section:addKeybind(config)
-            local keybind = addElement("Keybind", config)
-            keybind.value = config.Default or "None"
-            keybind.callbacks = {}
-            
-            local btn = createUIElement("TextButton", {
-                Parent = keybind.control,
-                Size = UDim2.new(0, 80, 0, 28),
-                Position = UDim2.new(0, 0, 0.5, 0),
-                AnchorPoint = Vector2.new(0, 0.5),
-                BackgroundColor3 = self.theme.surfaceVariant,
-                BackgroundTransparency = 0.8,
-                Text = keybind.value,
-                TextColor3 = self.theme.onSurface,
-                TextSize = 12,
-                Font = Enum.Font.Gotham,
-                AutoButtonColor = false,
-            }, {
-                createUIElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
-                createUIElement("UIStroke", {
-                    Color = self.theme.outlineVariant,
-                    Transparency = 0.5,
-                    Thickness = 1,
-                }),
-                createUIElement("UIPadding", {
-                    PaddingLeft = UDim.new(0, 12),
-                    PaddingRight = UDim.new(0, 12),
-                }),
-            })
-            
-            keybind.control.Size = UDim2.new(0, 0, 0, 28)
-            
-            function keybind:OnChanged(callback)
-                table.insert(self.callbacks, callback)
-                callback(self.value)
-            end
-            
-            local picking = false
-            
-            btn.MouseButton1Click:Connect(function()
-                picking = true
-                btn.Text = "..."
-                self:addLog("Keybind picking: " .. config.Title)
-            end)
-            
-            UserInputService.InputBegan:Connect(function(input)
-                if picking then
-                    if input.UserInputType == Enum.UserInputType.Keyboard then
-                        local key = input.KeyCode.Name
-                        keybind.value = key
-                        btn.Text = key
-                        picking = false
-                        for _, callback in pairs(keybind.callbacks) do
-                            callback(key)
-                        end
-                        if config.Callback then
-                            config.Callback(key)
-                        end
-                        self:addLog("Keybind set: " .. config.Title .. " = " .. key)
-                    elseif input.UserInputType == Enum.UserInputType.MouseButton1 then
-                        keybind.value = "MouseLeft"
-                        btn.Text = "MouseLeft"
-                        picking = false
-                        for _, callback in pairs(keybind.callbacks) do
-                            callback("MouseLeft")
-                        end
-                        if config.Callback then
-                            config.Callback("MouseLeft")
-                        end
-                        self:addLog("Keybind set: " .. config.Title .. " = MouseLeft")
-                    elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
-                        keybind.value = "MouseRight"
-                        btn.Text = "MouseRight"
-                        picking = false
-                        for _, callback in pairs(keybind.callbacks) do
-                            callback("MouseRight")
-                        end
-                        if config.Callback then
-                            config.Callback("MouseRight")
-                        end
-                        self:addLog("Keybind set: " .. config.Title .. " = MouseRight")
-                    end
-                end
-            end)
-            
-            function keybind:setValue(value)
-                keybind.value = value
-                btn.Text = value
-            end
-            
-            return keybind
-        end
-        
-        function section:addColorpicker(config)
-            local colorpicker = addElement("Colorpicker", config)
-            colorpicker.value = config.Default or Color3.fromRGB(255,255,255)
-            colorpicker.transparency = config.Transparency or 0
-            colorpicker.callbacks = {}
-            
-            local frame = createUIElement("Frame", {
-                Parent = colorpicker.control,
-                Size = UDim2.new(0, 28, 0, 28),
-                Position = UDim2.new(0, 0, 0.5, 0),
-                AnchorPoint = Vector2.new(0, 0.5),
-                BackgroundTransparency = 1,
-                ZIndex = 2,
-            })
-            
-            colorpicker.control.Size = UDim2.new(0, 28, 0, 28)
-            
-            local preview = createUIElement("Frame", {
-                Parent = frame,
-                Size = UDim2.fromScale(1, 1),
-                BackgroundColor3 = colorpicker.value,
-                BackgroundTransparency = colorpicker.transparency,
-                ZIndex = 2,
-            }, {
-                createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                createUIElement("UIStroke", {
-                    Color = self.theme.outlineVariant,
-                    Transparency = 0.5,
-                    Thickness = 1,
-                }),
-            })
-            
-            function colorpicker:OnChanged(callback)
-                table.insert(self.callbacks, callback)
-                callback(self.value)
-            end
-            
-            local function openPicker()
-                local dialog = self:createDialog("Color Picker")
-                local hue = 0
-                local sat = 1
-                local val = 1
-                local trans = colorpicker.transparency
-                
-                local function updatePreview()
-                    local c = Color3.fromHSV(hue, sat, val)
-                    preview.BackgroundColor3 = c
-                    preview.BackgroundTransparency = trans
-                end
-                
-                local function createSlider(label, min, max, callback)
-                    local frame = createUIElement("Frame", {
-                        Parent = dialog.content,
-                        Size = UDim2.new(1, 0, 0, 40),
-                        BackgroundTransparency = 1,
-                    })
-                    
-                    local labelObj = createUIElement("TextLabel", {
-                        Parent = frame,
-                        Text = label,
-                        TextColor3 = self.theme.onSurface,
-                        TextSize = 12,
-                        Font = Enum.Font.Gotham,
-                        BackgroundTransparency = 1,
-                        Size = UDim2.new(0, 60, 0, 20),
-                        TextXAlignment = Enum.TextXAlignment.Right,
-                    })
-                    
-                    local sliderFrame = createUIElement("Frame", {
-                        Parent = frame,
-                        Size = UDim2.new(1, -70, 0, 20),
-                        Position = UDim2.new(0, 64, 0, 10),
-                        BackgroundTransparency = 1,
-                    })
-                    
-                    local rail = createUIElement("Frame", {
-                        Parent = sliderFrame,
-                        Size = UDim2.new(1, 0, 0, 4),
-                        Position = UDim2.new(0, 0, 0.5, 0),
-                        AnchorPoint = Vector2.new(0, 0.5),
-                        BackgroundColor3 = self.theme.outlineVariant,
-                        BackgroundTransparency = 0.3,
-                    }, {
-                        createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                        createUIElement("Frame", {
-                            Name = "Fill",
-                            Size = UDim2.new(0, 0, 1, 0),
-                            BackgroundColor3 = self.theme.primary,
-                            BorderSizePixel = 0,
-                        }, {
-                            createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                        }),
-                    })
-                    
-                    local thumb = createUIElement("TextButton", {
-                        Parent = sliderFrame,
-                        Size = UDim2.new(0, 12, 0, 12),
-                        Position = UDim2.new(0, 0, 0.5, 0),
-                        AnchorPoint = Vector2.new(0, 0.5),
-                        BackgroundColor3 = self.theme.primary,
-                        BackgroundTransparency = 0.2,
-                        AutoButtonColor = false,
-                        ZIndex = 2,
-                    }, {
-                        createUIElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-                        createUIElement("UIStroke", {
-                            Color = self.theme.primary,
-                            Transparency = 0.5,
-                            Thickness = 2,
-                        }),
-                    })
-                    
-                    local valueLabel = createUIElement("TextLabel", {
-                        Parent = sliderFrame,
-                        Text = "",
-                        TextColor3 = self.theme.onSurfaceVariant,
-                        TextSize = 12,
-                        Font = Enum.Font.Gotham,
-                        BackgroundTransparency = 1,
-                        Position = UDim2.new(1, 4, 0.5, 0),
-                        AnchorPoint = Vector2.new(0, 0.5),
-                        Size = UDim2.new(0, 40, 0, 20),
-                        TextXAlignment = Enum.TextXAlignment.Left,
-                    })
-                    
-                    local function updateValue(value)
-                        local t = (value - min) / (max - min)
-                        local fill = rail:FindFirstChild("Fill")
-                        if fill then
-                            fill.Size = UDim2.new(t, 0, 1, 0)
-                        end
-                        thumb.Position = UDim2.new(t, -6, 0.5, 0)
-                        valueLabel.Text = tostring(math.round(value * 100) / 100)
-                        callback(value)
-                    end
-                    
-                    local dragging = false
-                    
-                    thumb.InputBegan:Connect(function(input)
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                            dragging = true
-                        end
-                    end)
-                    
-                    thumb.InputEnded:Connect(function(input)
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                            dragging = false
-                        end
-                    end)
-                    
-                    sliderFrame.InputBegan:Connect(function(input)
-                        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                            local pos = input.Position.X - rail.AbsolutePosition.X
-                            local t = math.clamp(pos / rail.AbsoluteSize.X, 0, 1)
-                            updateValue(min + (max - min) * t)
-                        end
-                    end)
-                    
-                    UserInputService.InputChanged:Connect(function(input)
-                        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-                            local pos = input.Position.X - rail.AbsolutePosition.X
-                            local t = math.clamp(pos / rail.AbsoluteSize.X, 0, 1)
-                            updateValue(min + (max - min) * t)
-                        end
-                    end)
-                    
-                    return {
-                        setValue = updateValue,
-                        frame = sliderFrame,
-                    }
-                end
-                
-                local hueSlider = createSlider("Hue", 0, 1, function(v)
-                    hue = v
-                    updatePreview()
-                end)
-                
-                local satSlider = createSlider("Sat", 0, 1, function(v)
-                    sat = v
-                    updatePreview()
-                end)
-                
-                local valSlider = createSlider("Val", 0, 1, function(v)
-                    val = v
-                    updatePreview()
-                end)
-                
-                local transSlider = createSlider("Trans", 0, 1, function(v)
-                    trans = v
-                    updatePreview()
-                end)
-                
-                local h, s, v = Color3.toHSV(colorpicker.value)
-                hueSlider.setValue(h)
-                satSlider.setValue(s)
-                valSlider.setValue(v)
-                transSlider.setValue(colorpicker.transparency)
-                
-                dialog:addButton("Done", function()
-                    colorpicker.value = Color3.fromHSV(hue, sat, val)
-                    colorpicker.transparency = trans
-                    preview.BackgroundColor3 = colorpicker.value
-                    preview.BackgroundTransparency = trans
-                    for _, callback in pairs(colorpicker.callbacks) do
-                        callback(colorpicker.value)
-                    end
-                    if config.Callback then
-                        config.Callback(colorpicker.value)
-                    end
-                    self:addLog("Colorpicker changed: " .. config.Title)
-                end)
-                
-                dialog:addButton("Cancel", function() end)
-                
-                dialog:open()
-            end
-            
-            frame.MouseButton1Click:Connect(openPicker)
-            
-            function colorpicker:setValue(color, transparency)
-                self.value = color or self.value
-                self.transparency = transparency or self.transparency
-                preview.BackgroundColor3 = self.value
-                preview.BackgroundTransparency = self.transparency
-            end
-            
-            return colorpicker
-        end
-        
-        function section:addLabel(config)
-            local label = addElement("Label", config)
-            
-            local labelObj = createUIElement("TextLabel", {
-                Parent = label.control,
-                Text = config.Text or "",
-                TextColor3 = self.theme.onSurfaceVariant,
-                TextSize = 12,
-                Font = Enum.Font.Gotham,
-                BackgroundTransparency = 1,
-                Size = UDim2.new(0, 0, 0, 20),
-                AutomaticSize = Enum.AutomaticSize.X,
-                TextXAlignment = Enum.TextXAlignment.Right,
-            })
-            
-            label.control.Size = UDim2.new(0, 0, 0, 20)
-            
-            function label:setText(text)
-                labelObj.Text = text
-            end
-            
-            return label
-        end
-        
-        table.insert(self.elements, section)
-        self:addLog("Section added: " .. title)
-        
-        return section
+    local function setValue(value)
+        motor:setGoal(Flipper.Spring.new(value, { frequency = 8 }))
     end
-    
-    return tabApi
+    return motor, setValue
 end
 
-function HyperionWindow:selectTab(tab)
-    if self.activeTab == tab then return end
-    for _, t in pairs(self.tabs) do
-        t.container.Visible = (t == tab)
-        local indicator = t.btn:FindFirstChild("Indicator")
-        local title = t.btn:FindFirstChild("Title")
-        if indicator then
-            indicator.BackgroundTransparency = (t == tab) and 0 or 1
-        end
-        if title then
-            title.TextColor3 = (t == tab) and self.theme.primary or self.theme.onSurfaceVariant
-        end
-        if t.btn then
-            t.btn.BackgroundTransparency = (t == tab) and 0.7 or 0.9
-        end
-    end
-    self.activeTab = tab
-    self:addLog("Tab selected: " .. tab.name)
+-- ============================================================
+-- 5. КОМПОНЕНТЫ MATERIAL YOU
+-- ============================================================
+
+-- Вспомогательные функции
+local function safeCallback(fn, ...)
+    if fn then pcall(fn, ...) end
 end
 
-function HyperionWindow:createDialog(title)
-    local dialog = {}
-    dialog.visible = false
+local function spring(t) return Flipper.Spring.new(t, { frequency = 5, dampingRatio = 0.7 }) end
+local function instant(t) return Flipper.Instant.new(t) end
+
+-- Element — базовый блок
+local function createElement(title, desc, parent, config)
+    config = config or {}
+    local el = {}
     
-    local overlay = createUIElement("Frame", {
-        Parent = self.root,
-        Size = UDim2.fromScale(1, 1),
-        BackgroundColor3 = Color3.fromRGB(0,0,0),
-        BackgroundTransparency = 0.5,
-        Visible = false,
-        ZIndex = 100,
+    local label = Creator.New("TextLabel", {
+        Text = title or "",
+        TextSize = 16,
+        Font = Enum.Font.GothamSSm,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Size = UDim2.new(1, 0, 0, 20),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        ThemeTag = { TextColor3 = "onSurface" },
     })
     
-    local frame = createUIElement("Frame", {
-        Parent = overlay,
-        Size = UDim2.new(0, 360, 0, 240),
-        Position = UDim2.new(0.5, -180, 0.5, -120),
-        BackgroundColor3 = self.theme.surface,
-        BackgroundTransparency = 0.05,
-        ZIndex = 101,
+    local descLabel = Creator.New("TextLabel", {
+        Text = desc or "",
+        TextSize = 14,
+        TextColor3 = getColor("onSurfaceVariant"),
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Size = UDim2.new(1, 0, 0, 16),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        Visible = desc and desc ~= "",
+        ThemeTag = { TextColor3 = "onSurfaceVariant" },
+    })
+    
+    local labelHolder = Creator.New("Frame", {
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, -24, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        Position = UDim2.fromOffset(12, 0),
     }, {
-        createUIElement("UICorner", { CornerRadius = UDim.new(0, 12) }),
-        createUIElement("UIStroke", {
-            Color = self.theme.outlineVariant,
-            Transparency = 0.5,
+        Creator.New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
+        label,
+        descLabel,
+    })
+    
+    local frame = Creator.New("Frame", {
+        BackgroundColor3 = getColor("surfaceVariant"),
+        BackgroundTransparency = 0.3,
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        Parent = parent,
+        LayoutOrder = config.LayoutOrder or 7,
+        ThemeTag = { BackgroundColor3 = "surfaceVariant" },
+    }, {
+        Creator.New("UICorner", { CornerRadius = UDim.new(0, 16) }),
+        labelHolder,
+    })
+    
+    el.Frame = frame
+    el.Label = label
+    el.DescLabel = descLabel
+    el.SetTitle = function(t) label.Text = t or "" end
+    el.SetDesc = function(d) descLabel.Text = d or "" descLabel.Visible = d and d ~= "" end
+    el.Visible = function(v) frame.Visible = v end
+    el.Destroy = function() frame:Destroy() end
+    
+    return el
+end
+
+-- ============================================================
+-- 6. ОСНОВНОЙ API
+-- ============================================================
+
+-- GUI корень
+local gui = Creator.New("ScreenGui", { Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui") })
+Library.GUI = gui
+if protectgui then protectgui(gui) end
+
+-- Window
+function Library:CreateWindow(config)
+    config = config or {}
+    config.Title = config.Title or "Window"
+    config.Size = config.Size or UDim2.fromOffset(560, 420)
+    config.Theme = "MaterialYou"
+    
+    local win = {}
+    Library.Window = win
+    table.insert(Library.Windows, win)
+    
+    local root = Creator.New("Frame", {
+        Size = config.Size,
+        Position = UDim2.fromOffset(100, 100),
+        BackgroundColor3 = getColor("surface"),
+        Parent = gui,
+        ThemeTag = { BackgroundColor3 = "surface" },
+    }, {
+        Creator.New("UICorner", { CornerRadius = UDim.new(0, 28) }),
+        Creator.New("UIStroke", {
+            Color = getColor("outlineVariant"),
+            Transparency = 0.3,
             Thickness = 1,
         }),
-        createUIElement("TextLabel", {
-            Text = title or "Dialog",
-            TextColor3 = self.theme.onSurface,
-            TextSize = 18,
-            Font = Enum.Font.GothamBold,
-            BackgroundTransparency = 1,
-            Position = UDim2.new(0, 16, 0, 12),
-            Size = UDim2.new(1, -32, 0, 28),
+    })
+    
+    win.Root = root
+    win.Active = true
+    
+    -- Заголовок
+    local titleBar = Creator.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 56),
+        BackgroundTransparency = 1,
+    }, {
+        Creator.New("TextLabel", {
+            Text = config.Title,
+            TextSize = 22,
+            Font = Enum.Font.GothamSSm,
             TextXAlignment = Enum.TextXAlignment.Left,
+            Position = UDim2.fromOffset(20, 0),
+            Size = UDim2.new(1, -120, 1, 0),
+            ThemeTag = { TextColor3 = "onSurface" },
         }),
-        createUIElement("TextButton", {
-            Text = "✕",
-            TextColor3 = self.theme.onSurfaceVariant,
-            TextSize = 16,
+    })
+    titleBar.Parent = root
+    
+    -- Кнопки управления (Material You стиль)
+    local function makeTitleButton(icon, pos, callback)
+        local btn = Creator.New("TextButton", {
+            Size = UDim2.fromOffset(40, 40),
+            Position = pos,
+            AnchorPoint = Vector2.new(1, 0.5),
             BackgroundTransparency = 1,
-            Position = UDim2.new(1, -36, 0, 4),
-            Size = UDim2.new(0, 28, 0, 32),
-            Font = Enum.Font.Gotham,
-            ZIndex = 2,
-        }),
-    })
-    
-    local content = createUIElement("Frame", {
-        Parent = frame,
-        Size = UDim2.new(1, -32, 1, -80),
-        Position = UDim2.new(0, 16, 0, 48),
-        BackgroundTransparency = 1,
-    }, {
-        createUIElement("UIListLayout", {
-            Padding = UDim.new(0, 8),
-            SortOrder = Enum.SortOrder.LayoutOrder,
-        }),
-    })
-    
-    local buttonBar = createUIElement("Frame", {
-        Parent = frame,
-        Size = UDim2.new(1, -32, 0, 36),
-        Position = UDim2.new(0, 16, 1, -44),
-        BackgroundTransparency = 1,
-    }, {
-        createUIElement("UIListLayout", {
-            Padding = UDim.new(0, 8),
-            FillDirection = Enum.FillDirection.Horizontal,
-            HorizontalAlignment = Enum.HorizontalAlignment.Right,
-            SortOrder = Enum.SortOrder.LayoutOrder,
-        }),
-    })
-    
-    dialog.content = content
-    dialog.buttonBar = buttonBar
-    dialog.overlay = overlay
-    dialog.frame = frame
-    
-    function dialog:addButton(text, callback)
-        local btn = createUIElement("TextButton", {
-            Parent = self.buttonBar,
-            Text = text,
-            TextColor3 = self.theme.onPrimary,
-            TextSize = 13,
-            Font = Enum.Font.Gotham,
-            BackgroundColor3 = self.theme.primary,
-            Size = UDim2.new(0, 0, 0, 32),
-            AutomaticSize = Enum.AutomaticSize.X,
         }, {
-            createUIElement("UIPadding", {
+            Creator.New("ImageLabel", {
+                Image = icon,
+                Size = UDim2.fromOffset(20, 20),
+                Position = UDim2.fromScale(0.5, 0.5),
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                ThemeTag = { ImageColor3 = "onSurfaceVariant" },
+            }),
+        })
+        Creator.AddSignal(btn.MouseButton1Click, callback)
+        return btn
+    end
+    
+    local function closeWindow()
+        Library:Destroy()
+    end
+    
+    local function toggleMinimize()
+        if win.Minimized then
+            root.Visible = true
+            win.Minimized = false
+        else
+            root.Visible = false
+            win.Minimized = true
+        end
+    end
+    
+    makeTitleButton("rbxassetid://10709791437", UDim2.new(1, -12, 0.5, 0), closeWindow).Parent = root
+    makeTitleButton("rbxassetid://10734896384", UDim2.new(1, -56, 0.5, 0), toggleMinimize).Parent = root
+    
+    -- Контейнер для вкладок
+    local tabContainer = Creator.New("ScrollingFrame", {
+        Size = UDim2.new(1, 0, 1, -56),
+        Position = UDim2.fromOffset(0, 56),
+        CanvasSize = UDim2.fromScale(0, 0),
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        ScrollBarThickness = 0,
+    }, {
+        Creator.New("UIListLayout", {
+            Padding = UDim.new(0, 12),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        }),
+        Creator.New("UIPadding", {
+            PaddingLeft = UDim.new(0, 16),
+            PaddingRight = UDim.new(0, 16),
+            PaddingTop = UDim.new(0, 16),
+            PaddingBottom = UDim.new(0, 16),
+        }),
+    })
+    tabContainer.Parent = root
+    
+    -- Функция для обновления CanvasSize
+    local function updateCanvas()
+        local layout = tabContainer:FindFirstChild("UIListLayout")
+        if layout then
+            tabContainer.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 32)
+        end
+    end
+    Creator.AddSignal(tabContainer:GetPropertyChangedSignal("AbsoluteSize"), updateCanvas)
+    
+    -- Добавление вкладок
+    win.Tabs = {}
+    win.CurrentTab = nil
+    
+    function win:AddTab(tabConfig)
+        tabConfig.Title = tabConfig.Title or "Tab"
+        
+        -- Кнопка вкладки (нижняя навигация в Material You)
+        local tabBtn = Creator.New("TextButton", {
+            Size = UDim2.new(0, 0, 0, 48),
+            AutomaticSize = Enum.AutomaticSize.X,
+            BackgroundTransparency = 1,
+            Parent = tabContainer,
+            LayoutOrder = #win.Tabs + 1,
+        }, {
+            Creator.New("UIPadding", {
                 PaddingLeft = UDim.new(0, 16),
                 PaddingRight = UDim.new(0, 16),
             }),
-            createUIElement("UICorner", { CornerRadius = UDim.new(0, 6) }),
+            Creator.New("TextLabel", {
+                Text = tabConfig.Title,
+                TextSize = 16,
+                Font = Enum.Font.GothamSSm,
+                ThemeTag = { TextColor3 = "onSurfaceVariant" },
+            }),
+            Creator.New("Frame", {
+                Size = UDim2.new(1, 0, 0, 3),
+                Position = UDim2.new(0, 0, 1, 0),
+                BackgroundColor3 = getColor("primary"),
+                BackgroundTransparency = 1,
+                ThemeTag = { BackgroundColor3 = "primary" },
+            }, {
+                Creator.New("UICorner", { CornerRadius = UDim.new(0, 2) }),
+            }),
         })
-        btn.MouseButton1Click:Connect(function()
-            if callback then callback() end
-            self:close()
-        end)
-    end
-    
-    function dialog:open()
-        self.overlay.Visible = true
-        self.visible = true
-    end
-    
-    function dialog:close()
-        self.overlay.Visible = false
-        self.visible = false
-    end
-    
-    local closeBtn = frame:FindFirstChildOfClass("TextButton")
-    if closeBtn then
-        closeBtn.MouseButton1Click:Connect(function()
-            dialog:close()
-        end)
-    end
-    
-    overlay.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            if not frame.AbsolutePosition or not frame.AbsoluteSize then return end
-            local pos = input.Position
-            local x = pos.X - frame.AbsolutePosition.X
-            local y = pos.Y - frame.AbsolutePosition.Y
-            if x < 0 or x > frame.AbsoluteSize.X or y < 0 or y > frame.AbsoluteSize.Y then
-                dialog:close()
+        
+        -- Контейнер для контента вкладки
+        local content = Creator.New("ScrollingFrame", {
+            Size = UDim2.new(1, 0, 1, -56),
+            Position = UDim2.fromOffset(0, 56),
+            BackgroundTransparency = 1,
+            Visible = false,
+            CanvasSize = UDim2.fromScale(0, 0),
+            ScrollingDirection = Enum.ScrollingDirection.Y,
+            ScrollBarThickness = 4,
+            ScrollBarImageTransparency = 0.7,
+            ScrollBarImageColor3 = getColor("outlineVariant"),
+        }, {
+            Creator.New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
+            Creator.New("UIPadding", {
+                PaddingLeft = UDim.new(0, 16),
+                PaddingRight = UDim.new(0, 16),
+                PaddingTop = UDim.new(0, 16),
+                PaddingBottom = UDim.new(0, 16),
+            }),
+        })
+        content.Parent = root
+        
+        -- Обновление контента
+        local function updateContentCanvas()
+            local layout = content:FindFirstChild("UIListLayout")
+            if layout then
+                content.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 32)
             end
+        end
+        Creator.AddSignal(content:GetPropertyChangedSignal("AbsoluteSize"), updateContentCanvas)
+        
+        -- Индикатор активной вкладки
+        local indicator = tabBtn:FindFirstChildWhichIsA("Frame")
+        
+        -- Функция выбора вкладки
+        local function selectTab()
+            if win.CurrentTab then
+                win.CurrentTab.Content.Visible = false
+                win.CurrentTab.Button.BackgroundTransparency = 1
+                local oldInd = win.CurrentTab.Button:FindFirstChildWhichIsA("Frame")
+                if oldInd then oldInd.BackgroundTransparency = 1 end
+                local oldLabel = win.CurrentTab.Button:FindFirstChildWhichIsA("TextLabel")
+                if oldLabel then
+                    Creator.OverrideTag(oldLabel, { TextColor3 = "onSurfaceVariant" })
+                end
+            end
+            win.CurrentTab = tab
+            content.Visible = true
+            tabBtn.BackgroundTransparency = 0.05
+            if indicator then indicator.BackgroundTransparency = 0 end
+            local label = tabBtn:FindFirstChildWhichIsA("TextLabel")
+            if label then
+                Creator.OverrideTag(label, { TextColor3 = "primary" })
+            end
+            updateContentCanvas()
+        end
+        
+        Creator.AddSignal(tabBtn.MouseButton1Click, selectTab)
+        
+        -- Объект вкладки
+        local tab = {
+            Title = tabConfig.Title,
+            Button = tabBtn,
+            Content = content,
+            Sections = {},
+        }
+        
+        -- Добавление секции
+        function tab:AddSection(sectionTitle)
+            local section = {}
+            
+            local header = Creator.New("TextLabel", {
+                Text = sectionTitle or "Section",
+                TextSize = 18,
+                Font = Enum.Font.GothamSSm,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                Size = UDim2.new(1, 0, 0, 28),
+                ThemeTag = { TextColor3 = "onSurface" },
+            })
+            
+            local container = Creator.New("Frame", {
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, 0),
+                AutomaticSize = Enum.AutomaticSize.Y,
+            }, {
+                Creator.New("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+                header,
+            })
+            
+            local sectionFrame = Creator.New("Frame", {
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, 0),
+                AutomaticSize = Enum.AutomaticSize.Y,
+                Parent = content,
+                LayoutOrder = #tab.Sections + 1,
+            }, {
+                container,
+            })
+            
+            section.Container = container
+            section.Frame = sectionFrame
+            section.Header = header
+            
+            function section:AddButton(btnConfig)
+                btnConfig.Title = btnConfig.Title or "Button"
+                
+                local btn = Creator.New("TextButton", {
+                    Text = btnConfig.Title,
+                    TextSize = 16,
+                    Font = Enum.Font.GothamSSm,
+                    BackgroundColor3 = getColor("primary"),
+                    TextColor3 = getColor("onPrimary"),
+                    Size = UDim2.new(1, 0, 0, 52),
+                    AutomaticSize = Enum.AutomaticSize.Y,
+                    Parent = container,
+                    LayoutOrder = #container:GetChildren() + 1,
+                    ThemeTag = { BackgroundColor3 = "primary", TextColor3 = "onPrimary" },
+                }, {
+                    Creator.New("UICorner", { CornerRadius = UDim.new(0, 16) }),
+                    Creator.New("UIPadding", { PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14) }),
+                })
+                
+                Creator.AddSignal(btn.MouseButton1Click, function()
+                    safeCallback(btnConfig.Callback)
+                end)
+                
+                -- Анимация нажатия
+                Creator.AddSignal(btn.MouseButton1Down, function()
+                    btn.Size = UDim2.new(1, 0, 0, 48)
+                    local scale = Creator.New("UIScale", { Scale = 0.96, Parent = btn })
+                    task.wait(0.1)
+                    btn.Size = UDim2.new(1, 0, 0, 52)
+                    scale:Destroy()
+                end)
+                
+                return btn
+            end
+            
+            function section:AddToggle(toggleConfig)
+                toggleConfig.Title = toggleConfig.Title or "Toggle"
+                toggleConfig.Default = toggleConfig.Default or false
+                
+                local el = createElement(toggleConfig.Title, toggleConfig.Description, container, { LayoutOrder = #container:GetChildren() + 1 })
+                
+                local value = toggleConfig.Default
+                
+                -- M3 Switch
+                local switchBg = Creator.New("Frame", {
+                    Size = UDim2.fromOffset(48, 28),
+                    BackgroundColor3 = getColor("surfaceVariant"),
+                    BackgroundTransparency = 0.7,
+                    Position = UDim2.new(1, -12, 0.5, 0),
+                    AnchorPoint = Vector2.new(1, 0.5),
+                    Parent = el.Frame,
+                    ThemeTag = { BackgroundColor3 = "surfaceVariant" },
+                }, {
+                    Creator.New("UICorner", { CornerRadius = UDim.new(1, 0) }),
+                    Creator.New("Frame", {
+                        Name = "Thumb",
+                        Size = UDim2.fromOffset(22, 22),
+                        Position = UDim2.fromOffset(2, 3),
+                        BackgroundColor3 = getColor("onSurfaceVariant"),
+                        ThemeTag = { BackgroundColor3 = "onSurfaceVariant" },
+                    }, {
+                        Creator.New("UICorner", { CornerRadius = UDim.new(1, 0) }),
+                    }),
+                })
+                
+                local thumb = switchBg:FindFirstChild("Thumb")
+                
+                local function setValue(newVal)
+                    value = newVal
+                    local color = value and "primary" or "onSurfaceVariant"
+                    Creator.OverrideTag(thumb, { BackgroundColor3 = color })
+                    if value then
+                        thumb.Position = UDim2.fromOffset(24, 3)
+                        Creator.OverrideTag(switchBg, { BackgroundColor3 = "primary" })
+                        switchBg.BackgroundTransparency = 0.8
+                    else
+                        thumb.Position = UDim2.fromOffset(2, 3)
+                        Creator.OverrideTag(switchBg, { BackgroundColor3 = "surfaceVariant" })
+                        switchBg.BackgroundTransparency = 0.7
+                    end
+                    safeCallback(toggleConfig.Callback, value)
+                end
+                
+                Creator.AddSignal(el.Frame.MouseButton1Click, function()
+                    setValue(not value)
+                end)
+                
+                setValue(toggleConfig.Default)
+                
+                el.SetValue = setValue
+                return el
+            end
+            
+            function section:AddSlider(sliderConfig)
+                sliderConfig.Title = sliderConfig.Title or "Slider"
+                sliderConfig.Default = sliderConfig.Default or 0
+                sliderConfig.Min = sliderConfig.Min or 0
+                sliderConfig.Max = sliderConfig.Max or 100
+                
+                local el = createElement(sliderConfig.Title, sliderConfig.Description, container, { LayoutOrder = #container:GetChildren() + 1 })
+                
+                local value = sliderConfig.Default
+                
+                -- M3 Slider
+                local track = Creator.New("Frame", {
+                    Size = UDim2.new(1, -60, 0, 4),
+                    Position = UDim2.new(0, 0, 1, -16),
+                    BackgroundColor3 = getColor("surfaceVariant"),
+                    ThemeTag = { BackgroundColor3 = "surfaceVariant" },
+                }, {
+                    Creator.New("UICorner", { CornerRadius = UDim.new(1, 0) }),
+                    Creator.New("Frame", {
+                        Name = "Fill",
+                        Size = UDim2.fromScale(0.5, 1),
+                        BackgroundColor3 = getColor("primary"),
+                        ThemeTag = { BackgroundColor3 = "primary" },
+                    }, {
+                        Creator.New("UICorner", { CornerRadius = UDim.new(1, 0) }),
+                    }),
+                    Creator.New("Frame", {
+                        Name = "Thumb",
+                        Size = UDim2.fromOffset(20, 20),
+                        Position = UDim2.fromScale(0.5, 0.5),
+                        AnchorPoint = Vector2.new(0.5, 0.5),
+                        BackgroundColor3 = getColor("primary"),
+                        ThemeTag = { BackgroundColor3 = "primary" },
+                    }, {
+                        Creator.New("UICorner", { CornerRadius = UDim.new(1, 0) }),
+                        Creator.New("UIStroke", {
+                            Color = getColor("surface"),
+                            Thickness = 2,
+                            ThemeTag = { Color = "surface" },
+                        }),
+                    }),
+                })
+                track.Parent = el.Frame
+                
+                local fill = track:FindFirstChild("Fill")
+                local thumb = track:FindFirstChild("Thumb")
+                
+                local function setValue(newVal)
+                    value = math.clamp(newVal, sliderConfig.Min, sliderConfig.Max)
+                    local ratio = (value - sliderConfig.Min) / (sliderConfig.Max - sliderConfig.Min)
+                    fill.Size = UDim2.fromScale(ratio, 1)
+                    thumb.Position = UDim2.fromScale(ratio, 0.5)
+                    safeCallback(sliderConfig.Callback, value)
+                end
+                
+                -- Drag logic
+                local dragging = false
+                Creator.AddSignal(track.InputBegan, function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        dragging = true
+                        local pos = input.Position.X - track.AbsolutePosition.X
+                        local ratio = math.clamp(pos / track.AbsoluteSize.X, 0, 1)
+                        setValue(sliderConfig.Min + (sliderConfig.Max - sliderConfig.Min) * ratio)
+                    end
+                end)
+                
+                Creator.AddSignal(UserInputService.InputChanged, function(input)
+                    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                        local pos = input.Position.X - track.AbsolutePosition.X
+                        local ratio = math.clamp(pos / track.AbsoluteSize.X, 0, 1)
+                        setValue(sliderConfig.Min + (sliderConfig.Max - sliderConfig.Min) * ratio)
+                    end
+                end)
+                
+                Creator.AddSignal(UserInputService.InputEnded, function(input)
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                        dragging = false
+                    end
+                end)
+                
+                setValue(sliderConfig.Default)
+                el.SetValue = setValue
+                return el
+            end
+            
+            -- Добавим ещё базовые элементы: Dropdown, Colorpicker, Input, Keybind по необходимости
+            -- (здесь они опущены для краткости, но могут быть добавлены по запросу)
+            
+            table.insert(tab.Sections, section)
+            return section
+        end
+        
+        -- Если это первая вкладка — активируем
+        if #win.Tabs == 0 then
+            selectTab()
+        end
+        
+        table.insert(win.Tabs, tab)
+        return tab
+    end
+    
+    -- Функция выбора вкладки по индексу
+    function win:SelectTab(index)
+        if win.Tabs[index] then
+            win.Tabs[index].Button.MouseButton1Click:Fire()
+        end
+    end
+    
+    -- Центрирование окна
+    local function centerWindow()
+        local vp = workspace.CurrentCamera.ViewportSize
+        root.Position = UDim2.fromOffset(
+            math.max(0, (vp.X - root.AbsoluteSize.X) / 2),
+            math.max(0, (vp.Y - root.AbsoluteSize.Y) / 2)
+        )
+    end
+    centerWindow()
+    Creator.AddSignal(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"), centerWindow)
+    
+    -- Минимизация
+    win.Minimized = false
+    function win:Minimize()
+        toggleMinimize()
+    end
+    
+    -- Dialog
+    function win:Dialog(dialogConfig)
+        -- Простой диалог в стиле M3
+        local overlay = Creator.New("Frame", {
+            Size = UDim2.fromScale(1, 1),
+            BackgroundColor3 = Color3.new(0, 0, 0),
+            BackgroundTransparency = 0.5,
+            Parent = gui,
+        })
+        
+        local dialog = Creator.New("Frame", {
+            Size = UDim2.fromOffset(320, 180),
+            Position = UDim2.fromScale(0.5, 0.5),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundColor3 = getColor("surface"),
+            ThemeTag = { BackgroundColor3 = "surface" },
+        }, {
+            Creator.New("UICorner", { CornerRadius = UDim.new(0, 24) }),
+            Creator.New("TextLabel", {
+                Text = dialogConfig.Title or "Dialog",
+                TextSize = 20,
+                Font = Enum.Font.GothamSSm,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                Position = UDim2.fromOffset(20, 20),
+                Size = UDim2.new(1, -40, 0, 28),
+                ThemeTag = { TextColor3 = "onSurface" },
+            }),
+            Creator.New("TextLabel", {
+                Text = dialogConfig.Content or "",
+                TextSize = 14,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextYAlignment = Enum.TextYAlignment.Top,
+                Position = UDim2.fromOffset(20, 56),
+                Size = UDim2.new(1, -40, 0, 60),
+                TextWrapped = true,
+                ThemeTag = { TextColor3 = "onSurfaceVariant" },
+            }),
+            Creator.New("Frame", {
+                Position = UDim2.new(0, 0, 1, -56),
+                Size = UDim2.new(1, 0, 0, 56),
+                BackgroundTransparency = 1,
+            }, {
+                Creator.New("UIListLayout", {
+                    FillDirection = Enum.FillDirection.Horizontal,
+                    HorizontalAlignment = Enum.HorizontalAlignment.Right,
+                    Padding = UDim.new(0, 8),
+                }),
+            }),
+        })
+        dialog.Parent = overlay
+        
+        local btnHolder = dialog:FindFirstChildWhichIsA("Frame")
+        for _, btnConfig in pairs(dialogConfig.Buttons or {}) do
+            local btn = Creator.New("TextButton", {
+                Text = btnConfig.Title or "OK",
+                TextSize = 14,
+                Font = Enum.Font.GothamSSm,
+                TextColor3 = getColor("primary"),
+                BackgroundTransparency = 1,
+                Size = UDim2.fromOffset(80, 40),
+                ThemeTag = { TextColor3 = "primary" },
+            }, {
+                Creator.New("UICorner", { CornerRadius = UDim.new(0, 8) }),
+            })
+            btn.Parent = btnHolder
+            Creator.AddSignal(btn.MouseButton1Click, function()
+                safeCallback(btnConfig.Callback)
+                overlay:Destroy()
+            end)
+        end
+        
+        return overlay
+    end
+    
+    -- Notify
+    function win:Notify(notifConfig)
+        notifConfig.Title = notifConfig.Title or "Notification"
+        notifConfig.Content = notifConfig.Content or ""
+        notifConfig.Duration = notifConfig.Duration or 4
+        
+        local notif = Creator.New("Frame", {
+            Size = UDim2.fromOffset(320, 64),
+            Position = UDim2.new(1, -24, 0, 24),
+            AnchorPoint = Vector2.new(1, 0),
+            BackgroundColor3 = getColor("surface"),
+            ThemeTag = { BackgroundColor3 = "surface" },
+        }, {
+            Creator.New("UICorner", { CornerRadius = UDim.new(0, 16) }),
+            Creator.New("UIStroke", {
+                Color = getColor("outlineVariant"),
+                Transparency = 0.3,
+                Thickness = 1,
+            }),
+            Creator.New("TextLabel", {
+                Text = notifConfig.Title,
+                TextSize = 16,
+                Font = Enum.Font.GothamSSm,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                Position = UDim2.fromOffset(16, 8),
+                Size = UDim2.new(1, -32, 0, 20),
+                ThemeTag = { TextColor3 = "onSurface" },
+            }),
+            Creator.New("TextLabel", {
+                Text = notifConfig.Content,
+                TextSize = 14,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                Position = UDim2.fromOffset(16, 32),
+                Size = UDim2.new(1, -32, 0, 20),
+                ThemeTag = { TextColor3 = "onSurfaceVariant" },
+            }),
+        })
+        notif.Parent = gui
+        
+        -- Анимация появления
+        local motor = Flipper.SingleMotor.new(1)
+        motor:onStep(function(v)
+            notif.Position = UDim2.new(1, -24 - (1 - v) * 340, 0, 24 + (1 - v) * 20)
+            notif.BackgroundTransparency = 1 - v * 0.95
+        end)
+        motor:setGoal(spring(0))
+        
+        task.delay(notifConfig.Duration, function()
+            motor:setGoal(spring(1))
+            task.wait(0.3)
+            notif:Destroy()
+        end)
+        
+        return notif
+    end
+    
+    -- Возвращаем окно
+    return win
+end
+
+-- ============================================================
+-- 7. ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ
+-- ============================================================
+
+function Library:SetTheme(theme)
+    if theme == "MaterialYou" then
+        Creator.UpdateTheme()
+    end
+end
+
+function Library:SetSeedColor(color)
+    MaterialYou.SetSeedColor(color)
+    Creator.UpdateTheme()
+end
+
+function Library:Destroy()
+    if Library.Window then
+        Library.Window.Root:Destroy()
+        Library.Window = nil
+    end
+    Creator.Disconnect()
+    Library.GUI:Destroy()
+end
+
+function Library:Notify(config)
+    if Library.Window then
+        return Library.Window:Notify(config)
+    end
+end
+
+function Library:CreateMinimizer(config)
+    -- Простой минимизатор в стиле Material You
+    config = config or {}
+    local btn = Creator.New("TextButton", {
+        Size = UDim2.fromOffset(48, 48),
+        Position = config.Position or UDim2.fromOffset(20, 20),
+        BackgroundColor3 = getColor("surface"),
+        Parent = gui,
+        ThemeTag = { BackgroundColor3 = "surface" },
+    }, {
+        Creator.New("UICorner", { CornerRadius = UDim.new(1, 0) }),
+        Creator.New("UIStroke", {
+            Color = getColor("outlineVariant"),
+            Transparency = 0.3,
+            Thickness = 1,
+        }),
+        Creator.New("ImageLabel", {
+            Image = "rbxassetid://10734897102",
+            Size = UDim2.fromOffset(24, 24),
+            Position = UDim2.fromScale(0.5, 0.5),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            ThemeTag = { ImageColor3 = "onSurfaceVariant" },
+        }),
+    })
+    
+    Creator.AddSignal(btn.MouseButton1Click, function()
+        if Library.Window then
+            Library.Window:Minimize()
         end
     end)
     
-    return dialog
+    return btn
 end
 
-function HyperionWindow:addLog(message)
-    local time = os.date("%H:%M:%S")
-    table.insert(self.log, "[" .. time .. "] " .. message)
-    if #self.log > 100 then
-        table.remove(self.log, 1)
-    end
-    local logScroll = self.logger and self.logger:FindFirstChildOfClass("ScrollingFrame")
-    if logScroll then
-        local label = createUIElement("TextLabel", {
-            Parent = logScroll,
-            Text = "[" .. time .. "] " .. message,
-            TextColor3 = self.theme.onSurfaceVariant,
-            TextSize = 12,
-            Font = Enum.Font.Gotham,
-            BackgroundTransparency = 1,
-            Size = UDim2.new(1, 0, 0, 18),
-            TextXAlignment = Enum.TextXAlignment.Left,
-            TextWrapped = true,
-        })
-        task.wait()
-        logScroll.CanvasPosition = Vector2.new(0, logScroll.CanvasSize.Y.Offset)
-    end
+-- ============================================================
+-- 8. ИНИЦИАЛИЗАЦИЯ
+-- ============================================================
+
+-- Обновляем тему при изменении цвета
+MaterialYou.OnThemeChanged = function()
+    Creator.UpdateTheme()
 end
 
-function HyperionWindow:toggleLog()
-    if self.logger then
-        self.logger.Visible = not self.logger.Visible
-        self:addLog("Log toggled: " .. tostring(self.logger.Visible))
-    end
-end
+-- Глобальный доступ
+getgenv().Fluent = Library
+getgenv().FluentMaterial = Library
+getgenv().MaterialYou = MaterialYou
 
-function HyperionWindow:destroy()
-    self:addLog("Window destroyed")
-    self.gui:Destroy()
-end
-
-function HyperionWindow:minimize()
-    self.minimized = not self.minimized
-    self.root.Visible = not self.minimized
-    self:addLog("Minimized: " .. tostring(self.minimized))
-end
-
--- // ====== SAVE MANAGER ====== //
-
-Hyperion.SaveManager = {}
-Hyperion.SaveManager.__index = Hyperion.SaveManager
-
-function Hyperion.SaveManager.new(window)
-    local self = setmetatable({}, Hyperion.SaveManager)
-    self.window = window
-    self.folder = "HyperionSettings"
-    self.options = {}
-    self.ignored = {}
-    
-    if not isfolder(self.folder) then
-        makefolder(self.folder)
-    end
-    
-    return self
-end
-
-function Hyperion.SaveManager:setFolder(folder)
-    self.folder = folder
-    if not isfolder(self.folder) then
-        makefolder(self.folder)
-    end
-end
-
-function Hyperion.SaveManager:ignoreIndex(index)
-    self.ignored[index] = true
-end
-
-function Hyperion.SaveManager:registerOption(index, option)
-    self.options[index] = option
-end
-
-function Hyperion.SaveManager:save(name)
-    local data = {}
-    for idx, option in pairs(self.options) do
-        if not self.ignored[idx] then
-            local value = option.value
-            data[idx] = value
-        end
-    end
-    local json = HttpService:JSONEncode(data)
-    writefile(self.folder .. "/" .. name .. ".json", json)
-    self.window:addLog("Config saved: " .. name)
-end
-
-function Hyperion.SaveManager:load(name)
-    local path = self.folder .. "/" .. name .. ".json"
-    if not isfile(path) then return false end
-    local json = readfile(path)
-    local data = HttpService:JSONDecode(json)
-    for idx, value in pairs(data) do
-        if self.options[idx] and not self.ignored[idx] then
-            self.options[idx]:setValue(value)
-        end
-    end
-    self.window:addLog("Config loaded: " .. name)
-    return true
-end
-
-function Hyperion.SaveManager:list()
-    local files = listfiles(self.folder)
-    local names = {}
-    for _, file in pairs(files) do
-        if file:match("%.json$") then
-            local name = file:match("([^/]+)%.json$")
-            if name then
-                table.insert(names, name)
-            end
-        end
-    end
-    return names
-end
-
--- // ====== EXPORT ====== //
-
-Hyperion.Window = HyperionWindow
-Hyperion.Themes = Themes
-
-return Hyperion
+return Library, MaterialYou
